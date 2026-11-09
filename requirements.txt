@@ -16,7 +16,22 @@ google-genai>=2.0.0    # Primary AI (Gemini) — পুরনো google-generati
 edge-tts>=6.1.0
 pygame>=2.5.0
 SpeechRecognition>=3.10.0
-# pyaudio: Windows এ => pip install pipwin && pipwin install pyaudio
+# pyaudio (microphone input) is optional and platform-specific:
+#   Windows: pip install pipwin && pipwin install pyaudio
+#   macOS:   brew install portaudio && pip install pyaudio
+#   Linux:   sudo apt install portaudio19-dev && pip install pyaudio
+
+# Documents & advanced agents
+python-docx>=1.1.0
+pypdf>=4.0.0
+python-pptx>=0.6.23
+openpyxl>=3.1.0
+beautifulsoup4>=4.12.0
+youtube-transcript-api>=0.6.0
+yt-dlp>=2024.1.0
+
+# Cloud relay connector
+websockets>=12.0
 
 # Vision & Face
 opencv-python>=4.8.0

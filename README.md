@@ -320,14 +320,14 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-**Windows audio note.** `pyaudio` sometimes has no prebuilt wheel. If `pip install` fails on it:
+**Microphone note (optional).** `pyaudio` is intentionally not in `requirements.txt` because it needs native audio libraries. Everything works without it except microphone input. If you want voice commands:
 
 ```powershell
 pip install pipwin
 pipwin install pyaudio
 ```
 
-Then run `pip install -r requirements.txt` again. If you do not care about voice input, you can skip PyAudio entirely; everything else works.
+On macOS: `brew install portaudio && pip install pyaudio`. On Linux: `sudo apt install portaudio19-dev && pip install pyaudio`.
 
 **ChromaDB note.** The first run downloads a small embedding model. That is normal and only happens once.
 
@@ -1190,7 +1190,7 @@ All endpoints are JSON. Interactive docs are at `/docs` while the server runs.
 | GET | `/api/agents` | List all agents. |
 | GET | `/api/agents/health` | Dependency health summary. |
 | GET | `/api/agents/{id}` | One agent. |
-| POST | `/api/agents/{id}/toggle` | `{"enabled": true|false}` |
+| POST | `/api/agents/{id}/toggle` | Body: `{"enabled": true}` or `{"enabled": false}` |
 | POST | `/api/agents/bulk-toggle` | Toggle by ids or category. |
 | POST | `/api/agents/{id}/test` | Run the self-test. |
 
@@ -1340,12 +1340,14 @@ kill <PID>
 
 ### PyAudio will not install on Windows
 
+PyAudio needs PortAudio and a compiler. The easy path is:
+
 ```powershell
 pip install pipwin
 pipwin install pyaudio
 ```
 
-Or skip voice input; the rest of Atlas works without it.
+Or skip microphone input; the rest of Atlas works without it.
 
 ### Gemini returns `429 RESOURCE_EXHAUSTED` or `504 DEADLINE_EXCEEDED`
 
