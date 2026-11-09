@@ -1,0 +1,122 @@
+# ============================================================
+#  Secrets and local configuration
+# ============================================================
+.env
+.env.*
+!.env.example
+
+# ============================================================
+#  Runtime data — may contain personal information
+#  Keep the folder itself so a fresh clone has data/ ready.
+# ============================================================
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Databases and local state anywhere in the tree
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+
+# ============================================================
+#  Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ============================================================
+#  Node / frontend
+# ============================================================
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ============================================================
+#  Mobile (Capacitor / Android / iOS)
+# ============================================================
+mobile/node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/capacitor-cordova-android-plugins/
+mobile/android/app/src/main/assets/public/
+mobile/android/app/src/main/assets/capacitor.config.json
+mobile/android/app/src/main/assets/capacitor.plugins.json
+mobile/android/app/src/main/res/xml/config.xml
+mobile/android/.idea/
+mobile/ios/App/Pods/
+mobile/ios/App/build/
+mobile/ios/DerivedData/
+mobile/ios/App/App/public/
+mobile/ios/App/App/capacitor.config.json
+
+# Build output and signing material — never commit these
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+
+# ============================================================
+#  Editors and operating systems
+# ============================================================
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+dumps/

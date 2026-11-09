@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Atlas 7</string>
+    <string name="title_activity_main">Atlas 7</string>
+    <string name="package_name">ai.atlas7.app</string>
+    <string name="custom_url_scheme">ai.atlas7.app</string>
+    <string name="atlas_accessibility_label">Atlas WhatsApp call assistant</string>
+    <string name="atlas_accessibility_description">Atlas uses this service only for 20 seconds after you ask it to call a contact, to tap WhatsApp\'s voice-call button. It does not read or store your messages.</string>
+</resources>

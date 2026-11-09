@@ -1,0 +1,38 @@
+# ===== Atlas 7.0 Requirements =====
+
+# FastAPI (Eel এর replacement)
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# Core
+python-dotenv>=1.0.0
+
+# AI
+groq>=0.4.0            # Backup AI
+google-genai>=2.0.0    # Primary AI (Gemini) — পুরনো google-generativeai deprecated
+
+# Voice
+edge-tts>=6.1.0
+pygame>=2.5.0
+SpeechRecognition>=3.10.0
+# pyaudio: Windows এ => pip install pipwin && pipwin install pyaudio
+
+# Vision & Face
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Memory
+chromadb>=0.4.0
+numpy>=1.24.0
+
+# System
+psutil>=5.9.0
+requests>=2.31.0
+
+# Auth
+pyjwt>=2.8.0
+pyautogui>=0.9.54
+
+# Windows specific
+# pywin32>=306

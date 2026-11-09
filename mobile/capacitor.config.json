@@ -1,0 +1,13 @@
+{
+  "appId": "ai.atlas7.app",
+  "appName": "Atlas 7",
+  "webDir": "../frontend/dist",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "capacitor"
+  }
+}
