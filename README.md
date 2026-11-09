@@ -16,30 +16,31 @@ This README is written to be followed from top to bottom. If you have never seen
 ## Table of contents
 
 1. [What Atlas can do](#what-atlas-can-do)
-2. [The honest version: what is real and what is not](#the-honest-version-what-is-real-and-what-is-not)
-3. [The 22 agents](#the-22-agents)
-4. [How Atlas is put together](#how-atlas-is-put-together)
-5. [Tech stack](#tech-stack)
-6. [Folder structure](#folder-structure)
-7. [What you need before starting](#what-you-need-before-starting)
-8. [Quick start (15 minutes)](#quick-start-15-minutes)
-9. [Configuration: every environment variable](#configuration-every-environment-variable)
-10. [Using the dashboard](#using-the-dashboard)
-11. [The Agent Control Panel](#the-agent-control-panel)
-12. [Example commands](#example-commands)
-13. [Agent-by-agent guide](#agent-by-agent-guide)
-14. [The phone app (Android and iOS)](#the-phone-app-android-and-ios)
-15. [Laptop connector and cloud relay](#laptop-connector-and-cloud-relay)
-16. [Deploy to Hugging Face Spaces](#deploy-to-hugging-face-spaces)
-17. [Deploy to your own server](#deploy-to-your-own-server)
-18. [API reference](#api-reference)
-19. [Where your data lives](#where-your-data-lives)
-20. [Security notes](#security-notes)
-21. [Troubleshooting](#troubleshooting)
-22. [Adding your own agent](#adding-your-own-agent)
-23. [Roadmap](#roadmap)
-24. [Contributing](#contributing)
-25. [License](#license)
+2. [Screenshots and demo](#screenshots-and-demo)
+3. [The honest version: what is real and what is not](#the-honest-version-what-is-real-and-what-is-not)
+4. [The 22 agents](#the-22-agents)
+5. [How Atlas is put together](#how-atlas-is-put-together)
+6. [Tech stack](#tech-stack)
+7. [Folder structure](#folder-structure)
+8. [What you need before starting](#what-you-need-before-starting)
+9. [Quick start (15 minutes)](#quick-start-15-minutes)
+10. [Configuration: every environment variable](#configuration-every-environment-variable)
+11. [Using the dashboard](#using-the-dashboard)
+12. [The Agent Control Panel](#the-agent-control-panel)
+13. [Example commands](#example-commands)
+14. [Agent-by-agent guide](#agent-by-agent-guide)
+15. [The phone app (Android and iOS)](#the-phone-app-android-and-ios)
+16. [Laptop connector and cloud relay](#laptop-connector-and-cloud-relay)
+17. [Deploy to Hugging Face Spaces](#deploy-to-hugging-face-spaces)
+18. [Deploy to your own server](#deploy-to-your-own-server)
+19. [API reference](#api-reference)
+20. [Where your data lives](#where-your-data-lives)
+21. [Security notes](#security-notes)
+22. [Troubleshooting](#troubleshooting)
+23. [Adding your own agent](#adding-your-own-agent)
+24. [Roadmap](#roadmap)
+25. [Contributing](#contributing)
+26. [License](#license)
 
 ---
 
@@ -82,6 +83,37 @@ Here is the short version, grouped the way a normal person would think about it.
 - Network scan, risky process ranking, quarantine list.
 - Sensitive-data screen and clipboard detection, blur and audit log.
 - Privacy mode, watermark, and self-destruct helpers.
+
+---
+
+## Screenshots and demo
+
+Everything below is a real screenshot from the running app — no mockups, no edited UI. The animation walks through the five screens described in this README.
+
+![Atlas 7.0 demo: dashboard, Agent Control Panel, call agents, agent detail and chat](docs/demo/atlas-demo.gif)
+
+### The screens, one by one
+
+| # | Screen | What you are looking at |
+|---|---|---|
+| 1 | [Dashboard](docs/demo/01-dashboard.png) | Live CPU, RAM and disk stats, weather, camera card, the Arc Reactor, and the conversation panel. |
+| 2 | [Agent Control Panel](docs/demo/02-agent-panel.png) | All 22 agents with their on/off switches, permissions, health badges and step-by-step pipelines. |
+| 3 | [Call agents](docs/demo/03-call-agents.png) | The two phone-first agents: **WhatsApp Call Agent** and **AI Call Receptionist**. |
+| 4 | [Agent detail](docs/demo/04-agent-detail.png) | Expanded agent card: permissions, health, actions and the saved contact list used for WhatsApp calls. |
+| 5 | [Chat command](docs/demo/05-chat-command.png) | Typing “system status” and getting a real PC report from the PC Control Agent — CPU, RAM, disk, uptime and battery. |
+
+The screenshots were taken from the production build (`npm run build`, then `python server.py`) on a Windows laptop. Your own numbers, weather and machine name will be different.
+
+### Regenerate the demo
+
+The capture pipeline is included, so you can refresh the images after changing the UI:
+
+```bash
+python tools/capture_demo.py     # writes the five PNGs to docs/demo/
+python tools/build_demo_gif.py   # builds docs/demo/atlas-demo.gif
+```
+
+`capture_demo.py` uses headless Chrome through the DevTools protocol, so it does not need Playwright or Selenium. Set `ATLAS_DEMO_URL=http://localhost:5173/` to capture from the Vite dev server instead of the production server.
 
 ---
 
@@ -244,6 +276,8 @@ Atlas react main/
 │
 ├── connector/atlas_laptop.py     # Outbound WebSocket connector
 ├── deploy/hf/README.md           # Hugging Face deployment guide
+├── docs/demo/                    # README screenshots + demo GIF
+├── tools/                        # capture_demo.py + build_demo_gif.py
 ├── data/                         # Runtime data (git-ignored)
 └── logs/                         # Runtime logs (git-ignored)
 ```

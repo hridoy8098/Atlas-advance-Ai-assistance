@@ -52,10 +52,12 @@ export const verifyPin = (pin) => api.post('/auth/pin', { pin }).then(r => r.dat
 export const lockSystem = () => api.post('/auth/logout').then(r => r.data)
 
 // ===== COMMAND =====
+// Agent commands can legitimately take 1-2 minutes on free AI tiers
+// (Gemini quota fallback to Groq). Give them their own long timeout.
 export const sendCommand = (command, platform) => api.post('/command', {
   command,
   platform: platform || (isNativeApp() ? nativePlatform() : 'desktop'),
-}).then(r => r.data)
+}, { timeout: 180000 }).then(r => r.data)
 
 // ===== VOICE =====
 export const getVoiceSpeaking = () => api.get('/voice/speaking').then(r => r.data)
