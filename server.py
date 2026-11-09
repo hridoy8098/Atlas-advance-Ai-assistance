@@ -22,20 +22,9 @@ import config
 
 app = FastAPI(title="Atlas 7.0 API", version="7.0.0")
 
-# Public deployments are opened from static hosts (GitHub Pages, Hugging Face)
-# and phone apps, so the browser origin is not known in advance. Cloud mode
-# authenticates with Bearer tokens (not cookies), which makes "*" safe.
-CLOUD_ORIGINS = bool(getattr(config, "ATLAS_CLOUD", False))
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"] if CLOUD_ORIGINS else [
-        "http://localhost:5173", "http://localhost:3000", "http://localhost:8000",
-        "https://localhost", "capacitor://localhost", "http://localhost",
-    ],
-    allow_credentials=not CLOUD_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS is registered *after* the cloud auth gate below so it stays the
+# outermost middleware: preflight requests must succeed without a token, and
+# 401 responses still need CORS headers for the browser to read them.
 
 # ===== CLOUD AUTH GATE =====
 # Local installs (ATLAS_CLOUD=0) stay open. A public deployment requires a
@@ -101,6 +90,22 @@ async def cloud_auth_gate(request: Request, call_next):
     if not token or session_manager is None or not session_manager.is_valid(token):
         return JSONResponse(status_code=401, content={"detail": "Authentication required"})
     return await call_next(request)
+
+
+# Public deployments are opened from static hosts (GitHub Pages, Hugging Face)
+# and phone apps, so the browser origin is not known in advance. Cloud mode
+# authenticates with Bearer tokens (not cookies), which makes "*" safe.
+CLOUD_ORIGINS = bool(getattr(config, "ATLAS_CLOUD", False))
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if CLOUD_ORIGINS else [
+        "http://localhost:5173", "http://localhost:3000", "http://localhost:8000",
+        "https://localhost", "capacitor://localhost", "http://localhost",
+    ],
+    allow_credentials=not CLOUD_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ===== Global error handler =====
 @app.exception_handler(Exception)
