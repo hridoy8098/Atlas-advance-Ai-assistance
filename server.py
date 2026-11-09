@@ -22,13 +22,17 @@ import config
 
 app = FastAPI(title="Atlas 7.0 API", version="7.0.0")
 
+# Public deployments are opened from static hosts (GitHub Pages, Hugging Face)
+# and phone apps, so the browser origin is not known in advance. Cloud mode
+# authenticates with Bearer tokens (not cookies), which makes "*" safe.
+CLOUD_ORIGINS = bool(getattr(config, "ATLAS_CLOUD", False))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+    allow_origins=["*"] if CLOUD_ORIGINS else [
         "http://localhost:5173", "http://localhost:3000", "http://localhost:8000",
         "https://localhost", "capacitor://localhost", "http://localhost",
     ],
-    allow_credentials=True,
+    allow_credentials=not CLOUD_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -633,6 +637,16 @@ FRONTEND_DIST = config.FRONTEND_DIR / "dist"
 if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
     print("✅ Frontend dist mounted")
+else:
+    # API-only deployments (e.g. Render). The UI lives on GitHub Pages.
+    @app.get("/")
+    async def api_root():
+        return {
+            "app": "Atlas 7.0 API",
+            "version": config.APP_VERSION,
+            "health": "/api/health",
+            "docs": "/docs",
+        }
 
 # ===== MAIN =====
 if __name__ == "__main__":

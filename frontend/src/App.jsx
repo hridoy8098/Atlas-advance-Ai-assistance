@@ -8,9 +8,7 @@ import { getHealth, getServerUrl, isNativeApp } from './services/api'
 import useAtlasStore from './store/useAtlasStore'
 
 function App() {
-  const [needsServer, setNeedsServer] = useState(
-    () => isNativeApp() && !getServerUrl()
-  )
+  const [needsServer, setNeedsServer] = useState(false)
   const [setupOpen, setSetupOpen] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
@@ -33,8 +31,15 @@ function App() {
     }
     window.addEventListener('atlas:unauthorized', onUnauthorized)
     getHealth()
-      .then(health => setAuthRequired(Boolean(health.auth_required)))
-      .catch(() => { /* offline: existing screens handle it */ })
+      .then(health => {
+        setAuthRequired(Boolean(health.auth_required))
+        setNeedsServer(false)
+      })
+      .catch(() => {
+        // Static hosting (GitHub Pages / HF) has no backend of its own.
+        // Ask for the API server URL once, unless the user already saved one.
+        if (!isNativeApp() && !getServerUrl()) setNeedsServer(true)
+      })
       .finally(() => setAuthChecked(true))
     return () => window.removeEventListener('atlas:unauthorized', onUnauthorized)
   }, [logout])

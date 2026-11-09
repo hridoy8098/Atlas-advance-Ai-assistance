@@ -1,0 +1,40 @@
+# Render Blueprint — Atlas 7.0 free tier
+#
+# The React UI is hosted on GitHub Pages:
+#   https://hridoy8098.github.io/Atlas-advance-Ai-assistance/
+#
+# This service only runs the FastAPI backend. Free plan limits:
+#   512 MB RAM, 750 instance hours/month, sleeps after 15 min idle,
+#   ephemeral disk (SQLite and uploads reset on every restart).
+
+services:
+  - type: web
+    name: atlas-7-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: ATLAS_CLOUD
+        value: "1"
+      - key: ATLAS_VOICE_AUTOSTART
+        value: "0"
+      - key: AUTH_PIN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_KEY_1
+        sync: false
+      - key: WEATHER_API_KEY
+        sync: false
+      - key: NEWS_API_KEY
+        sync: false
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+      - key: HIBP_API_KEY
+        sync: false
+      - key: USER_NAME
+        value: Boss

@@ -16,3 +16,9 @@ data/backups/
 logs/
 .venv/
 venv/
+mobile/
+docs/
+tools/
+.github/
+render.yaml
+README.md

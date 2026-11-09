@@ -55,7 +55,7 @@ export default function ServerSetup({ blocking = false, onClose, onConnected }) 
       }, 450)
     } catch (e) {
       setStatus('error')
-      setError('Server পাওয়া যায়নি। Laptop-এ Atlas চালু আছে এবং একই WiFi-তে আছেন কি?')
+      setError('Server পাওয়া যায়নি। URL সঠিক কিনা এবং server চালু আছে কিনা দেখুন।')
     }
   }
 
@@ -80,25 +80,26 @@ export default function ServerSetup({ blocking = false, onClose, onConnected }) 
           <Laptop size={17} color={T.accent} />
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Connect to laptop</div>
-          <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>Atlas server · same WiFi</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Connect Atlas server</div>
+          <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>Cloud URL or same WiFi</div>
         </div>
         <Link2 size={15} color={T.dim} />
       </div>
 
       <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.5, margin: '10px 0 12px' }}>
-        Laptop-এ <span style={{ color: T.text, fontFamily: T.mono }}>python server.py</span> চালু করুন।
-        তারপর laptop-এর WiFi IP দিন, যেমন <span style={{ color: T.text, fontFamily: T.mono }}>http://192.168.0.5:8000</span>।
+        Backend-এর URL দিন। Cloud deployment হলে Render URL, নইলে laptop-এ{' '}
+        <span style={{ color: T.text, fontFamily: T.mono }}>python server.py</span> চালিয়ে WiFi IP,
+        যেমন <span style={{ color: T.text, fontFamily: T.mono }}>http://192.168.0.5:8000</span>।
       </div>
 
       <label style={{ fontSize: 9.5, color: T.dim, display: 'block', marginBottom: 5, letterSpacing: '0.08em' }}>
-        LAPTOP SERVER URL
+        ATLAS SERVER URL
       </label>
       <input
         value={url}
         onChange={e => setUrl(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') connect() }}
-        placeholder="http://192.168.0.5:8000"
+        placeholder="https://atlas-7-api.onrender.com"
         style={inputStyle}
         autoCapitalize="none"
         autoCorrect="off"
@@ -147,7 +148,7 @@ export default function ServerSetup({ blocking = false, onClose, onConnected }) 
       <div style={{ marginTop: 10, fontSize: 9.5, color: T.dim, lineHeight: 1.5 }}>
         {isNativeApp()
           ? 'Phone app · PC agents will execute on the paired laptop.'
-          : 'Desktop browser · leave empty to use this same server.'}
+          : 'Web build · paste the backend URL (Render cloud or your laptop).'}
       </div>
 
       {pairing?.pairing_code && (

@@ -1,0 +1,26 @@
+# Atlas 7.0 — Render free tier (512 MB RAM)
+#
+# API-only image: the React UI is served by GitHub Pages, so Node and the
+# frontend build are not part of this container. Cloud auth is enforced by
+# ATLAS_CLOUD=1 (set in render.yaml).
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    ATLAS_VOICE_AUTOSTART=0 \
+    ATLAS_CLOUD=1 \
+    PORT=10000
+
+WORKDIR /app
+
+COPY requirements-render.txt ./
+RUN pip install --no-cache-dir -r requirements-render.txt
+
+COPY . .
+RUN mkdir -p data logs
+
+EXPOSE 10000
+
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --timeout-keep-alive 75"]

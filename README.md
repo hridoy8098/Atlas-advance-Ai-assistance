@@ -31,16 +31,17 @@ This README is written to be followed from top to bottom. If you have never seen
 14. [Agent-by-agent guide](#agent-by-agent-guide)
 15. [The phone app (Android and iOS)](#the-phone-app-android-and-ios)
 16. [Laptop connector and cloud relay](#laptop-connector-and-cloud-relay)
-17. [Deploy to Hugging Face Spaces](#deploy-to-hugging-face-spaces)
-18. [Deploy to your own server](#deploy-to-your-own-server)
-19. [API reference](#api-reference)
-20. [Where your data lives](#where-your-data-lives)
-21. [Security notes](#security-notes)
-22. [Troubleshooting](#troubleshooting)
-23. [Adding your own agent](#adding-your-own-agent)
-24. [Roadmap](#roadmap)
-25. [Contributing](#contributing)
-26. [License](#license)
+17. [Deploy free: GitHub Pages + Render](#deploy-free-github-pages--render)
+18. [Deploy to Hugging Face Spaces](#deploy-to-hugging-face-spaces)
+19. [Deploy to your own server](#deploy-to-your-own-server)
+20. [API reference](#api-reference)
+21. [Where your data lives](#where-your-data-lives)
+22. [Security notes](#security-notes)
+23. [Troubleshooting](#troubleshooting)
+24. [Adding your own agent](#adding-your-own-agent)
+25. [Roadmap](#roadmap)
+26. [Contributing](#contributing)
+27. [License](#license)
 
 ---
 
@@ -1085,6 +1086,108 @@ The Agent Control Panel footer also shows connector status.
 | omitted | On a cloud server with a connected laptop, relay. Otherwise run locally. |
 
 Phone-only commands ignore `target` and always run locally.
+
+---
+
+## Deploy free: GitHub Pages + Render
+
+This is the zero-cost public setup with permanent URLs. The React UI is static and lives on **GitHub Pages**; the FastAPI backend runs on **Render's free web service**. Neither needs a credit card.
+
+```
+https://hridoy8098.github.io/Atlas-advance-Ai-assistance/   ← UI (GitHub)
+                    ↓ HTTPS + Bearer token
+https://atlas-7-api.onrender.com                            ← API (Render)
+```
+
+GitHub Pages cannot run Python, so the backend must live somewhere else. This split is the closest free setup to "host it on GitHub".
+
+### What works and what does not
+
+Render free gives 512 MB RAM, so [`requirements-render.txt`](requirements-render.txt) leaves out OpenCV, pygame, pyautogui, SpeechRecognition, ChromaDB, pandas and matplotlib. Every heavy import in the code is already guarded, so the server starts and reports those features as unavailable instead of crashing.
+
+| Works | Not available |
+|---|---|
+| Chat (Gemini / Groq) | Face login, intruder detection |
+| API agents (research, translate, code, email draft) | Screen control, music player |
+| Document generation (DOCX, PDF, PPTX, XLSX) | Server-side microphone STT |
+| PIN login, Agent Control Panel | WhatsApp bridge, call receptionist |
+| edge-tts voice output | Semantic vector memory (falls back to SQLite) |
+
+### Limits you accept
+
+- **512 MB RAM** — no browser automation, no local models.
+- **Sleep after 15 minutes** — the next request takes 30–60 seconds to wake.
+- **Ephemeral disk** — chats, contacts, settings and uploads reset on every restart. Use a free Postgres (Neon/Supabase) if you need persistence.
+- **750 instance hours/month** — one always-on service fits, but keep-alive pings use that budget.
+
+### Step 1 — Enable GitHub Pages
+
+The workflow in [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml) builds the UI and publishes it whenever `frontend/` changes.
+
+1. Open the repository on GitHub → **Settings → Pages**.
+2. Under **Build and deployment → Source**, choose **GitHub Actions**.
+3. Push a change to `frontend/`, or run the **Deploy frontend to GitHub Pages** workflow manually from the **Actions** tab.
+
+The site appears at:
+
+```
+https://hridoy8098.github.io/Atlas-advance-Ai-assistance/
+```
+
+`vite.config.js` reads `VITE_BASE_PATH`, and the workflow sets it to the repository subpath. Local builds keep `/`.
+
+### Step 2 — Create the Render service
+
+1. Sign up at [render.com](https://render.com) with GitHub. No card is required for the free web service.
+2. **New → Blueprint**, then pick this repository. Render reads [`render.yaml`](render.yaml).
+3. Fill the secret values when prompted:
+
+   | Secret | Value |
+   |---|---|
+   | `AUTH_PIN` | your 6-digit dashboard PIN (not `123456`) |
+   | `GEMINI_API_KEY` | your Gemini key |
+   | `GROQ_KEY_1` | your Groq key (recommended) |
+   | `WEATHER_API_KEY` | optional |
+   | `NEWS_API_KEY` | optional |
+   | `VIRUSTOTAL_API_KEY` | optional |
+   | `HIBP_API_KEY` | optional |
+
+4. Click **Apply**. The first Docker build takes 5–10 minutes.
+
+Your API URL will be:
+
+```
+https://atlas-7-api.onrender.com
+```
+
+Check it with:
+
+```bash
+curl https://atlas-7-api.onrender.com/api/health
+```
+
+Expected: `{"status":"ok",...,"auth_required":true,...}`
+
+### Step 3 — Connect the UI
+
+1. Open the GitHub Pages URL.
+2. The **Connect Atlas server** dialog appears because a static site has no backend of its own.
+3. Enter the Render URL and click **Connect**.
+4. Log in with your `AUTH_PIN`.
+
+The URL is stored in `localStorage`, so the dialog does not appear again in that browser. In cloud mode the server accepts requests from any origin but requires a Bearer token, so the public API is not an open door.
+
+### Step 4 — Keep it awake (optional)
+
+Free services sleep after 15 minutes. Create a free monitor at [cron-job.org](https://cron-job.org) that requests `https://atlas-7-api.onrender.com/api/health` every 10 minutes. One always-on service uses about 730 of the 750 monthly hours.
+
+### Updating
+
+- UI: push to `frontend/` → the Pages workflow rebuilds.
+- Backend: push to `main` → Render redeploys automatically.
+- Change the PIN: update the `AUTH_PIN` secret in Render and redeploy. `data/pin_hash.json` is not in the image, so the environment variable is used.
+
+Full notes: [`deploy/render/README.md`](deploy/render/README.md).
 
 ---
 
