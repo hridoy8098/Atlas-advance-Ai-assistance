@@ -4,6 +4,12 @@ This folder documents the first live deployment. The actual `Dockerfile` and
 `requirements-hf.txt` live at the repository root because Hugging Face builds a
 Space from the root of its repository.
 
+> **2026 note:** Hugging Face requires a **PRO subscription** to create Docker
+> or Gradio Spaces on the free `cpu-basic` hardware. The API returns
+> `402 Payment Required` for free accounts. Static Spaces remain free but cannot
+> run the Python backend. Without PRO, use a Cloudflare quick tunnel or a small
+> VPS (see the main README). `tools/deploy_hf.py` automates the steps below.
+
 ## 1. Create the Space
 
 - Hugging Face → New Space → **Docker** → Blank.

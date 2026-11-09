@@ -1094,6 +1094,35 @@ Hugging Face Spaces is the quickest way to get a public HTTPS URL for the phone.
 
 Full notes live in [`deploy/hf/README.md`](deploy/hf/README.md). Short version:
 
+> **2026 plan limit.** Docker and Gradio Spaces on the free `cpu-basic` hardware now require a **PRO subscription**. Static Spaces are still free, but they cannot run the Python backend. If your account is not PRO, use the [Cloudflare quick tunnel](#free-alternative-cloudflare-quick-tunnel) below or a small VPS instead. `tools/deploy_hf.py` automates every step in this section and prints the generated PIN and pairing token.
+
+### Free alternative: Cloudflare quick tunnel
+
+This gives you a public HTTPS URL in about two minutes, with no account and no payment. The URL is temporary and changes when the tunnel restarts, and your laptop must stay on.
+
+1. Download `cloudflared` for your OS from the [official releases page](https://github.com/cloudflare/cloudflared/releases/latest). On Windows, get `cloudflared-windows-amd64.exe` and rename it to `cloudflared.exe`.
+2. Set a strong PIN and start Atlas in cloud mode:
+
+   ```powershell
+   python -c "from backend.auth.pin_auth import pin_auth; pin_auth.set_pin('246810')"
+   $env:ATLAS_CLOUD="1"
+   $env:ATLAS_VOICE_AUTOSTART="0"
+   python server.py
+   ```
+
+   `data/pin_hash.json` overrides the `AUTH_PIN` variable, which is why the first line sets the PIN directly. Pick your own six digits.
+
+3. In a second terminal, start the tunnel:
+
+   ```powershell
+   cloudflared tunnel --url http://localhost:8000
+   ```
+
+4. Copy the `https://<random>.trycloudflare.com` URL from the output.
+5. In the phone app, open **Server setup**, enter that URL, and log in with your PIN.
+
+Because `ATLAS_CLOUD=1`, every API call and the WebSocket need a valid PIN session, so the public URL is not an open door. PC agents run on the same laptop, so no separate connector is needed for this setup.
+
 ### Step 1 — Create the Space
 
 1. Go to huggingface.co → **New Space**.
