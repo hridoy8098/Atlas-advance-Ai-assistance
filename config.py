@@ -69,6 +69,10 @@ AUTH_LOCKOUT_TIME = 600
 SESSION_TIMEOUT = 1800
 FACE_SCAN_TIMEOUT = 10
 
+# Cloud mode: a public deployment (Hugging Face, VPS) must require login.
+# Local installs keep the dashboard open by default.
+ATLAS_CLOUD = os.getenv("ATLAS_CLOUD", "0").strip().lower() in ("1", "true", "yes")
+
 # ============================================================
 # 🤖 AI MODEL SETTINGS
 # ============================================================

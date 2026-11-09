@@ -3,7 +3,6 @@ import { useState, useRef, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { verifyPin } from '../services/api'
 import useAtlasStore from '../store/useAtlasStore'
-import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
 export default function LoginPage() {
@@ -11,7 +10,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [shake, setShake] = useState(false)
   const { setAuthenticated } = useAtlasStore()
-  const navigate = useNavigate()
   const refs = [useRef(), useRef(), useRef(), useRef(), useRef(), useRef()]
 
   useEffect(() => { refs[0].current?.focus() }, [])
@@ -37,7 +35,6 @@ export default function LoginPage() {
       const res = await verifyPin(pinStr)
       if (res.success) {
         setAuthenticated(res.session_token)
-        navigate('/')
       } else {
         setShake(true)
         toast.error(res.reason || 'Wrong PIN')

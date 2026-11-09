@@ -1138,8 +1138,10 @@ In the Space: **Settings → Variables and secrets**.
 | `GROQ_KEY_1` | your Groq key (recommended) |
 | `ATLAS_CLOUD` | `1` |
 | `ATLAS_PAIR_TOKEN` | a long random string |
-| `AUTH_PIN` | your dashboard PIN |
+| `AUTH_PIN` | your dashboard PIN (change it from `123456`) |
 | `USER_NAME` | your name |
+
+With `ATLAS_CLOUD=1`, the server enforces the PIN on every `/api/*` call except `/api/health` and the login endpoint. The dashboard and the phone show the PIN screen first, and five wrong attempts trigger a five-minute lockout. Local installs (`ATLAS_CLOUD=0`) stay open, so nothing changes on your laptop.
 
 Never commit `.env` to the Space repository.
 
@@ -1196,7 +1198,7 @@ Use a process manager (systemd, supervisor, or Docker restart policies) so it co
 
 ### Before exposing it
 
-- Set a strong `AUTH_PIN`.
+- Set a strong `AUTH_PIN`. With `ATLAS_CLOUD=1`, every API call needs a PIN session; five wrong PINs lock that IP for five minutes.
 - Use HTTPS. The dashboard PIN travels over the wire.
 - Restrict `/docs` if you do not want a public API explorer.
 - Remember that the Terminal Agent and File Agent are effectively remote shell access.

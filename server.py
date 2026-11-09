@@ -3,6 +3,7 @@
 import sys
 import os
 import threading
+import time
 import traceback
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -31,6 +32,71 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== CLOUD AUTH GATE =====
+# Local installs (ATLAS_CLOUD=0) stay open. A public deployment requires a
+# valid PIN session for every API call except health and the login endpoint.
+CLOUD_AUTH_PUBLIC = {"/api/auth/pin", "/api/health"}
+PIN_ATTEMPTS = {}
+PIN_ATTEMPTS_LOCK = threading.Lock()
+PIN_MAX_ATTEMPTS = 5
+PIN_WINDOW_SECONDS = 300
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _pin_attempts_for(ip: str):
+    now = time.time()
+    with PIN_ATTEMPTS_LOCK:
+        attempts = [t for t in PIN_ATTEMPTS.get(ip, []) if now - t < PIN_WINDOW_SECONDS]
+        if attempts:
+            PIN_ATTEMPTS[ip] = attempts
+        else:
+            PIN_ATTEMPTS.pop(ip, None)
+    return attempts
+
+
+def _record_pin_failure(ip: str) -> None:
+    with PIN_ATTEMPTS_LOCK:
+        PIN_ATTEMPTS.setdefault(ip, []).append(time.time())
+
+
+def _clear_pin_failures(ip: str) -> None:
+    with PIN_ATTEMPTS_LOCK:
+        PIN_ATTEMPTS.pop(ip, None)
+
+
+def _bearer_token(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return ""
+
+
+@app.middleware("http")
+async def cloud_auth_gate(request: Request, call_next):
+    if not getattr(config, "ATLAS_CLOUD", False) or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+
+    path = request.url.path
+    if path in CLOUD_AUTH_PUBLIC:
+        if path == "/api/auth/pin" and request.method == "POST":
+            if len(_pin_attempts_for(_client_ip(request))) >= PIN_MAX_ATTEMPTS:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many PIN attempts. Try again in 5 minutes."},
+                )
+        return await call_next(request)
+
+    token = _bearer_token(request)
+    if not token or session_manager is None or not session_manager.is_valid(token):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    return await call_next(request)
 
 # ===== Global error handler =====
 @app.exception_handler(Exception)
@@ -162,13 +228,15 @@ class PinRequest(BaseModel):
 
 # ===== AUTH =====
 @app.post("/api/auth/pin")
-async def verify_pin(req: PinRequest):
+async def verify_pin(req: PinRequest, request: Request):
+    client_ip = _client_ip(request)
     try:
         if pin_auth is None:
             return {"success": False, "reason": "Auth module not loaded"}
 
         success, msg = pin_auth.verify(req.pin)
         if success:
+            _clear_pin_failures(client_ip)
             token = "atlas_session_token"
             if session_manager:
                 try:
@@ -182,6 +250,7 @@ async def verify_pin(req: PinRequest):
                     pass
             return {"success": True, "user_id": "main_user", "session_token": token}
 
+        _record_pin_failure(client_ip)
         if auth_logger:
             try:
                 auth_logger.log_failure("pin", msg)
@@ -432,6 +501,11 @@ manager = ConnectionManager()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    if getattr(config, "ATLAS_CLOUD", False):
+        token = websocket.query_params.get("token", "")
+        if not token or session_manager is None or not session_manager.is_valid(token):
+            await websocket.close(code=1008)
+            return
     await manager.connect(websocket)
     try:
         while True:
@@ -513,6 +587,7 @@ async def health():
     return {
         "status": "ok",
         "version": config.APP_VERSION,
+        "auth_required": bool(getattr(config, "ATLAS_CLOUD", False)),
         "pin_auth": pin_auth is not None,
         "ai_engine": ai_engine is not None,
         "voice": VOICE_AVAILABLE,

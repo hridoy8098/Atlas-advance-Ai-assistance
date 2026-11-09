@@ -44,12 +44,17 @@ Do **not** commit `.env`. Add secrets in **Space → Settings → Variables and 
 |---|---|---|
 | `GEMINI_API_KEY` | yes | Primary AI |
 | `GROQ_KEY_1` | recommended | Fallback AI |
-| `ATLAS_CLOUD` | yes (cloud) | `1` = relay PC/desktop agents to the paired laptop |
+| `ATLAS_CLOUD` | yes (cloud) | `1` = require a PIN session and relay PC/desktop agents to the paired laptop |
 | `ATLAS_PAIR_TOKEN` | yes (cloud) | Pairing code the laptop connector sends |
+| `AUTH_PIN` | yes (cloud) | 6-digit dashboard/phone PIN. Change it from `123456` before going public. |
+| `USER_NAME` | optional | How Atlas addresses you |
+| `ATLAS_VOICE_AUTOSTART` | optional | Set `0` on a Space (no microphone) |
 | `DATABASE_URL` | later | Postgres for persistent call data |
 | `TWILIO_ACCOUNT_SID` | later | Real receptionist calls |
 | `TWILIO_AUTH_TOKEN` | later | Real receptionist calls |
 | `TWILIO_PHONE_NUMBER` | later | Virtual number |
+
+**Security:** when `ATLAS_CLOUD=1`, every `/api/*` request needs a valid PIN session except `/api/health` and `POST /api/auth/pin`. Five wrong PINs lock that IP for five minutes, and the WebSocket (`/ws`) also requires the session token. Local installs (`ATLAS_CLOUD=0`) remain open.
 
 ## 4. Connect the laptop
 

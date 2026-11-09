@@ -1,10 +1,13 @@
 // store/useAtlasStore.js — Zustand global state
 import { create } from 'zustand'
+import { getAuthToken, setAuthToken, clearAuthToken } from '../services/api'
+
+const storedToken = getAuthToken()
 
 const useAtlasStore = create((set, get) => ({
   // Auth
-  isAuthenticated: false,
-  sessionToken: null,
+  isAuthenticated: Boolean(storedToken),
+  sessionToken: storedToken || null,
   userName: 'Boss',
 
   // UI
@@ -36,8 +39,14 @@ const useAtlasStore = create((set, get) => ({
   ws: null,
 
   // ===== ACTIONS =====
-  setAuthenticated: (token) => set({ isAuthenticated: true, sessionToken: token }),
-  logout: () => set({ isAuthenticated: false, sessionToken: null, messages: [] }),
+  setAuthenticated: (token) => {
+    setAuthToken(token)
+    set({ isAuthenticated: true, sessionToken: token })
+  },
+  logout: () => {
+    clearAuthToken()
+    set({ isAuthenticated: false, sessionToken: null, messages: [] })
+  },
   setUserName: (name) => set({ userName: name }),
   setActivePanel: (panel) => set({ activePanel: panel }),
   setCenterMode: (mode) => set({ centerMode: mode }),

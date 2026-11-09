@@ -41,11 +41,46 @@ export const checkServer = (url) => {
 
 const api = axios.create({ baseURL: '/api', timeout: 15000 })
 
+const TOKEN_KEY = 'atlas_session_token'
+
+export const getAuthToken = () => {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export const setAuthToken = (token) => {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch { /* storage unavailable */ }
+}
+
+export const clearAuthToken = () => setAuthToken('')
+
 // The phone can switch the laptop server without reloading the app.
 api.interceptors.request.use(config => {
   config.baseURL = getApiBase()
+  const token = getAuthToken()
+  if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
+
+// A 401 means the session expired or the PIN was never entered. The app
+// listens for this event and shows the login screen again.
+api.interceptors.response.use(
+  response => response,
+  error => {
+    const url = String(error?.config?.url || '')
+    if (error?.response?.status === 401 && !url.includes('/auth/pin')) {
+      clearAuthToken()
+      window.dispatchEvent(new Event('atlas:unauthorized'))
+    }
+    return Promise.reject(error)
+  },
+)
 
 // ===== AUTH =====
 export const verifyPin = (pin) => api.post('/auth/pin', { pin }).then(r => r.data)
@@ -174,12 +209,14 @@ export const generateImage = (prompt, size = '1024x1024') => api.post('/media/ge
 // ===== WEBSOCKET =====
 export const createWebSocket = (onMessage) => {
   const server = getServerUrl()
+  const token = getAuthToken()
+  const query = token ? `?token=${encodeURIComponent(token)}` : ''
   let wsUrl
   if (server) {
-    wsUrl = `${server.replace(/^http/, 'ws')}/ws`
+    wsUrl = `${server.replace(/^http/, 'ws')}/ws${query}`
   } else {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    wsUrl = `${protocol}//${window.location.host}/ws`
+    wsUrl = `${protocol}//${window.location.host}/ws${query}`
   }
   const ws = new WebSocket(wsUrl)
   ws.onopen = () => {
