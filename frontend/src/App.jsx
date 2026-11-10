@@ -4,7 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import MainPage from './pages/MainPage'
 import LoginPage from './pages/LoginPage'
 import ServerSetup from './components/jarvis/ServerSetup'
-import { getHealth, getServerUrl, isNativeApp } from './services/api'
+import { getHealth } from './services/api'
 import useAtlasStore from './store/useAtlasStore'
 
 function App() {
@@ -12,6 +12,7 @@ function App() {
   const [setupOpen, setSetupOpen] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
+  const [bootMessage, setBootMessage] = useState('ATLAS')
   const isAuthenticated = useAtlasStore(s => s.isAuthenticated)
   const logout = useAtlasStore(s => s.logout)
 
@@ -30,18 +31,40 @@ function App() {
       setAuthChecked(true)
     }
     window.addEventListener('atlas:unauthorized', onUnauthorized)
-    getHealth()
-      .then(health => {
-        setAuthRequired(Boolean(health.auth_required))
-        setNeedsServer(false)
-      })
-      .catch(() => {
-        // Static hosting (GitHub Pages / HF) has no backend of its own.
-        // Ask for the API server URL once, unless the user already saved one.
-        if (!isNativeApp() && !getServerUrl()) setNeedsServer(true)
-      })
-      .finally(() => setAuthChecked(true))
-    return () => window.removeEventListener('atlas:unauthorized', onUnauthorized)
+
+    let cancelled = false
+    let retryTimer = null
+
+    // Render's free tier sleeps after 15 idle minutes and needs up to a minute
+    // to wake, so a single failed health check is not final.
+    const probe = (attempt = 0) => {
+      getHealth()
+        .then(health => {
+          if (cancelled) return
+          setAuthRequired(Boolean(health.auth_required))
+          setNeedsServer(false)
+          setAuthChecked(true)
+        })
+        .catch(() => {
+          if (cancelled) return
+          if (attempt < 3) {
+            if (attempt === 0) setBootMessage('WAKING ATLAS CLOUD')
+            retryTimer = setTimeout(() => probe(attempt + 1), 4000)
+            return
+          }
+          // Nothing answered. Let the user check/paste the API URL, including
+          // in the native shell where no URL is baked in.
+          setNeedsServer(true)
+          setAuthChecked(true)
+        })
+    }
+    probe()
+
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+      window.removeEventListener('atlas:unauthorized', onUnauthorized)
+    }
   }, [logout])
 
   const showLogin = authChecked && authRequired && !isAuthenticated
@@ -67,8 +90,9 @@ function App() {
           minHeight: '100vh', display: 'flex', alignItems: 'center',
           justifyContent: 'center', background: '#050d16', color: '#38bdf8',
           fontFamily: "'Inter', sans-serif", letterSpacing: '0.35em', fontSize: 18,
+          textAlign: 'center', padding: 20,
         }}>
-          ATLAS
+          {bootMessage}
         </div>
       ) : showLogin ? (
         <LoginPage />

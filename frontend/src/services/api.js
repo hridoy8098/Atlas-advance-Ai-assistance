@@ -40,7 +40,8 @@ export const getApiBase = () => {
 export const checkServer = (url) => {
   const server = cleanServer(url)
   if (!server) return Promise.reject(new Error('Server URL is empty'))
-  return axios.get(`${server}/api/health`, { timeout: 8000 }).then(r => r.data)
+  // Generous timeout: a sleeping free-tier instance can take ~50s to wake up.
+  return axios.get(`${server}/api/health`, { timeout: 45000 }).then(r => r.data)
 }
 
 const api = axios.create({ baseURL: '/api', timeout: 15000 })
