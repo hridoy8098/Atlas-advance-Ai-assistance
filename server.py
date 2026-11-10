@@ -310,7 +310,15 @@ async def take_command(req: CommandRequest):
         except Exception as exc:
             print(f"⚠️ Connector relay error: {exc}")
 
-        result = relayed if relayed is not None else get_command_response(command, platform=req.platform)
+        # get_command_response() is synchronous and can take a minute (AI call).
+        # Run it in a worker thread so /api/health keeps answering; otherwise the
+        # platform health check times out and restarts the instance mid-request.
+        if relayed is not None:
+            result = relayed
+        else:
+            result = await run_in_threadpool(
+                lambda: get_command_response(command, platform=req.platform)
+            )
         response = result.get("response")
         lang = result.get("language", "en")
 
