@@ -72,7 +72,7 @@ function App() {
         </div>
       ) : showLogin ? (
         <LoginPage />
-      ) : (
+      ) : needsServer ? null : (
         <MainPage />
       )}
       {needsServer && (
