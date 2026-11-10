@@ -1170,12 +1170,14 @@ Expected: `{"status":"ok",...,"auth_required":true,...}`
 
 ### Step 3 — Connect the UI
 
-1. Open the GitHub Pages URL.
-2. The **Connect Atlas server** dialog appears because a static site has no backend of its own.
-3. Enter the Render URL and click **Connect**.
-4. Log in with your `AUTH_PIN`.
+The Pages workflow bakes `VITE_ATLAS_SERVER_URL` into the build, so visitors normally skip the setup dialog and land on the PIN screen. To point the UI at a different backend:
 
-The URL is stored in `localStorage`, so the dialog does not appear again in that browser. In cloud mode the server accepts requests from any origin but requires a Bearer token, so the public API is not an open door.
+1. Edit the `VITE_ATLAS_SERVER_URL` value in [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml).
+2. Push, or run the workflow manually.
+
+To change it per browser, open **Interface settings → Server** and enter another URL. The value is stored in `localStorage` and overrides the build default.
+
+In cloud mode the server accepts requests from any origin but requires a Bearer token, so the public API is not an open door.
 
 ### Step 4 — Keep it awake (optional)
 

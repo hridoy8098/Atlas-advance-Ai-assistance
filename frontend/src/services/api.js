@@ -11,11 +11,15 @@ export const nativePlatform = () =>
 
 const cleanServer = (url) => String(url || '').trim().replace(/\/+$/, '')
 
+// Optional build-time default so a hosted UI knows its backend without asking
+// the visitor to paste a URL (set VITE_ATLAS_SERVER_URL when building).
+const DEFAULT_SERVER = cleanServer(import.meta.env.VITE_ATLAS_SERVER_URL || '')
+
 export const getServerUrl = () => {
   try {
-    return cleanServer(localStorage.getItem(SERVER_KEY) || '')
+    return cleanServer(localStorage.getItem(SERVER_KEY) || '') || DEFAULT_SERVER
   } catch {
-    return ''
+    return DEFAULT_SERVER
   }
 }
 

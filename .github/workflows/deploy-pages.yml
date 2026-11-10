@@ -39,6 +39,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /Atlas-advance-Ai-assistance/
+          VITE_ATLAS_SERVER_URL: https://atlas-7-api.onrender.com
 
       # SPA fallback: GitHub Pages serves 404.html for unknown paths.
       - name: Add 404 fallback
