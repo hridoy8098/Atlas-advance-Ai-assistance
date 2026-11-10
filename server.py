@@ -2,6 +2,8 @@
 
 import sys
 import os
+import asyncio
+import tempfile
 import threading
 import time
 import traceback
@@ -9,10 +11,10 @@ import traceback
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, File, Form, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
@@ -234,6 +236,10 @@ class CommandRequest(BaseModel):
 
 class PinRequest(BaseModel):
     pin: str
+
+class TTSRequest(BaseModel):
+    text: str
+    language: Optional[str] = None
 
 # ===== AUTH =====
 @app.post("/api/auth/pin")
@@ -597,6 +603,148 @@ async def voice_listen_stop():
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ===== CLOUD VOICE (phone / webview) =====
+# A phone has the microphone and the cloud box has the speaker. These two
+# endpoints move the audio across: the client records and posts a clip, the
+# server transcribes it, and replies can be rendered to MP3 for playback.
+VOICE_LANG_MAP = {
+    "bn-BD": "bn", "bn-IN": "bn", "en-US": "en", "en-GB": "en",
+    "hi-IN": "hi", "ur-PK": "ur", "ar-SA": "ar",
+}
+VOICE_LANGS = {"bn", "en", "hi", "ur", "ar", "es", "fr", "de", "ru", "zh", "ja", "ko"}
+
+
+def _groq_audio_key() -> str:
+    return (os.getenv("GROQ_KEY_1") or os.getenv("GROQ_API_KEY") or "").strip()
+
+
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(file: UploadFile = File(...), language: str = Form("")):
+    """Transcribe a clip recorded by the phone or browser (Groq Whisper)."""
+    data = await file.read()
+    if not data:
+        return {"success": False, "error": "Empty recording"}
+    if len(data) > 12 * 1024 * 1024:
+        return {"success": False, "error": "Recording too large"}
+
+    key = _groq_audio_key()
+    if not key:
+        return {"success": False, "error": "GROQ_KEY_1 is not configured"}
+
+    lang = (language or "").strip()
+    lang = VOICE_LANG_MAP.get(lang, lang)
+    if lang not in VOICE_LANGS:
+        lang = ""
+
+    content_type = (file.content_type or "audio/webm").split(";")[0].lower()
+    ext = {
+        "audio/webm": "webm",
+        "audio/ogg": "ogg",
+        "audio/mp4": "mp4",
+        "audio/m4a": "m4a",
+        "audio/x-m4a": "m4a",
+        "audio/wav": "wav",
+        "audio/x-wav": "wav",
+        "audio/mpeg": "mp3",
+    }.get(content_type, "webm")
+
+    def _transcribe():
+        import requests
+
+        payload = {
+            "model": "whisper-large-v3-turbo",
+            "response_format": "json",
+            "temperature": "0",
+        }
+        if lang:
+            payload["language"] = lang
+
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {key}"},
+                files={"file": (f"voice.{ext}", data, content_type)},
+                data=payload,
+                timeout=90,
+            )
+        except Exception as exc:
+            print(f"❌ Groq STT request failed: {exc}")
+            return {"success": False, "error": "Transcription service unreachable"}
+
+        if response.status_code != 200:
+            print(f"❌ Groq STT {response.status_code}: {response.text[:200]}")
+            return {"success": False, "error": f"Transcription failed ({response.status_code})"}
+
+        text = str(response.json().get("text") or "").strip()
+        if not text:
+            return {"success": False, "error": "No speech detected"}
+        return {"success": True, "text": text, "language": lang or "auto"}
+
+    return await run_in_threadpool(_transcribe)
+
+
+@app.post("/api/voice/tts")
+def voice_tts(req: TTSRequest):
+    """Render a reply to MP3 with Edge TTS (free, Bengali + English).
+
+    Sync on purpose: FastAPI runs it in a worker thread, so the health check
+    keeps answering while the audio is generated.
+    """
+    text = " ".join((req.text or "").split()).strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"success": False, "error": "Empty text"})
+    text = text[:1200]
+
+    try:
+        import edge_tts
+    except ImportError:
+        return JSONResponse(status_code=503, content={"success": False, "error": "edge-tts not installed"})
+
+    language = (req.language or "auto").strip()
+    if language and language != "auto":
+        language = VOICE_LANG_MAP.get(language, language)
+
+    if voice_output is not None:
+        if language not in VOICE_LANGS:
+            language = voice_output.detect_language(text)
+        voice = voice_output.get_voice(language)
+    else:
+        has_bengali = any("\u0980" <= ch <= "\u09ff" for ch in text)
+        voice = config.EDGE_VOICE_BN if has_bengali else config.EDGE_VOICE_EN
+
+    temp_path = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
+    try:
+        async def _save():
+            communicate = edge_tts.Communicate(
+                text=text,
+                voice=voice,
+                rate=config.TTS_SPEED,
+                pitch=config.TTS_PITCH,
+            )
+            await communicate.save(temp_path)
+
+        asyncio.run(_save())
+        with open(temp_path, "rb") as handle:
+            audio = handle.read()
+    except Exception as exc:
+        print(f"❌ Cloud TTS error: {exc}")
+        return JSONResponse(status_code=502, content={"success": False, "error": str(exc)})
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
+    if not audio:
+        return JSONResponse(status_code=502, content={"success": False, "error": "No audio generated"})
+
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 # ===== HEALTH =====
 @app.get("/api/health")

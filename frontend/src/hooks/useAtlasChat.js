@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import useAtlasStore from '../store/useAtlasStore'
 import { sendCommand, getVoiceSpeaking } from '../services/api'
+import { speakReply, stopPlayback } from '../services/voice'
 import { runNativeAction } from '../services/native'
 
 export default function useAtlasChat({ onStateChange } = {}) {
@@ -47,6 +48,15 @@ export default function useAtlasChat({ onStateChange } = {}) {
         if (cycle !== cycleRef.current) return
         clearTimers()
         onStateChange?.('idle')
+      }
+
+      // The phone has the speaker, the cloud server does not: the WebView asks
+      // for an Edge TTS MP3 and ends the "speaking" state when playback stops.
+      const playback = speakReply(text)
+      if (playback) {
+        hardRef.current = setTimeout(finish, 60000)
+        playback.promise.then(finish).catch(finish)
+        return
       }
 
       hardRef.current = setTimeout(finish, estMs * 2 + 6000)
@@ -115,6 +125,7 @@ export default function useAtlasChat({ onStateChange } = {}) {
   const clear = useCallback(() => {
     clearTimers()
     cycleRef.current += 1
+    stopPlayback()
     clearMessages()
     onStateChange?.('idle')
   }, [clearMessages, clearTimers, onStateChange])

@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import useAtlasStore from '../../store/useAtlasStore'
-import { getHealth, getMetrics, getUserConfig, getWeather, listenVoice, stopSpeech, stopVoiceListen } from '../../services/api'
+import { getHealth, getMetrics, getUserConfig, getWeather, stopSpeech } from '../../services/api'
 import useAtlasChat from '../../hooks/useAtlasChat'
+import useMicrophone from '../../hooks/useMicrophone'
+import { stopPlayback } from '../../services/voice'
 import TopBar from './TopBar'
 import SystemStatsCard from './SystemStatsCard'
 import WeatherCard from './WeatherCard'
@@ -30,7 +32,6 @@ export default function JarvisHUD() {
 
   const [online, setOnline] = useState(true)
   const [cameraOn, setCameraOn] = useState(false)
-  const [isListening, setIsListening] = useState(false)
   const [chatState, setChatState] = useState('idle')
   const inputRef = useRef(null)
 
@@ -90,54 +91,24 @@ export default function JarvisHUD() {
   const chat = useAtlasChat({ onStateChange: setChatState })
   const { send: sendChat, messages, isProcessing } = chat
 
-  const listenAbortRef = useRef(null)
-  const listeningRef = useRef(false)
-
-  useEffect(
-    () => () => {
-      listeningRef.current = false
-      listenAbortRef.current?.abort()
-    },
-    []
-  )
+  // Voice input: record on the phone, transcribe on the server.
+  const mic = useMicrophone({
+    language: voiceLang,
+    onText: text => sendChat(text),
+    onError: message => toast.error(message),
+  })
 
   const toggleMic = useCallback(() => {
-    if (isListening) {
-      listeningRef.current = false
-      setIsListening(false)
-      listenAbortRef.current?.abort()
-      listenAbortRef.current = null
-      stopVoiceListen().catch(() => {})
+    if (mic.listening) {
+      mic.stop()
       return
     }
-
-    if (chatState === 'speaking') stopSpeech().catch(() => {})
-
-    listeningRef.current = true
-    setIsListening(true)
-    const controller = new AbortController()
-    listenAbortRef.current = controller
-
-    listenVoice(5, voiceLang, controller.signal)
-      .then(res => {
-        if (!listeningRef.current) return
-        listeningRef.current = false
-        setIsListening(false)
-        if (res?.success && res.text) sendChat(res.text)
-        else toast.error(res?.error || 'Kichu bujhte parlam na. Abar try koro.')
-      })
-      .catch(err => {
-        if (!listeningRef.current) return
-        listeningRef.current = false
-        setIsListening(false)
-        const cancelled =
-          err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError'
-        if (!cancelled) toast.error('Voice listen failed. Backend aar microphone check koro.')
-      })
-      .finally(() => {
-        if (listenAbortRef.current === controller) listenAbortRef.current = null
-      })
-  }, [chatState, isListening, sendChat, voiceLang])
+    if (chatState === 'speaking') {
+      stopSpeech().catch(() => {})
+      stopPlayback()
+    }
+    mic.start()
+  }, [chatState, mic])
 
   const refreshAll = useCallback(async () => {
     const results = await Promise.allSettled([loadMetrics(), loadWeather()])
@@ -169,7 +140,7 @@ export default function JarvisHUD() {
           <CoreDisplay
             online={online}
             state={chatState}
-            isListening={isListening}
+            isListening={mic.listening}
             centerMode={centerMode}
             onToggleMic={toggleMic}
             cameraOn={cameraOn}
@@ -186,7 +157,7 @@ export default function JarvisHUD() {
             onSend={sendChat}
             onClear={chat.clear}
             inputRef={inputRef}
-            isListening={isListening}
+            isListening={mic.listening}
             userName={userName}
           />
         </aside>

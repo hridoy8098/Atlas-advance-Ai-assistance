@@ -115,6 +115,27 @@ export const listenVoice = (duration = 5, language = 'auto', signal) => {
 }
 export const stopVoiceListen = () => api.post('/voice/listen/stop').then(r => r.data)
 
+// Phone/WebView path: the client records and uploads the clip, the server
+// transcribes it with Groq Whisper (the cloud box has no microphone).
+export const transcribeAudio = (blob, language = 'auto') => {
+  const type = (blob?.type || 'audio/webm').split(';')[0]
+  const ext = type.includes('mp4') || type.includes('m4a') ? 'm4a'
+    : type.includes('ogg') ? 'ogg'
+    : type.includes('wav') ? 'wav'
+    : type.includes('mpeg') ? 'mp3'
+    : 'webm'
+
+  const form = new FormData()
+  form.append('file', blob, `voice.${ext}`)
+  if (language && language !== 'auto') form.append('language', language)
+
+  return api.post('/voice/transcribe', form, { timeout: 90000 }).then(r => r.data)
+}
+
+// Edge TTS on the server, returned as MP3 so the phone can play it.
+export const fetchSpeech = (text, language = 'auto') =>
+  api.post('/voice/tts', { text, language }, { responseType: 'blob', timeout: 60000 })
+
 // ===== SYSTEM =====
 export const getMetrics = () => api.get('/system/metrics').then(r => r.data)
 export const getWeather = () => api.get('/system/weather').then(r => r.data)
