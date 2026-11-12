@@ -233,6 +233,9 @@ class CommandRequest(BaseModel):
     command: str
     platform: str = "desktop"
     target: str = "auto"
+    # Clients that render the reply themselves (phone WebView, browser) set
+    # this so the server does not also speak through the laptop speakers.
+    client_tts: bool = True
 
 class PinRequest(BaseModel):
     pin: str
@@ -330,8 +333,14 @@ async def take_command(req: CommandRequest):
 
         if response:
             print(f"🤖 Atlas: {str(response)[:100]}")
-            # A cloud server has no speaker; only play voice on the local desktop.
-            if VOICE_AVAILABLE and voice_output and os.getenv("ATLAS_CLOUD", "0") != "1":
+            # A cloud server has no speaker; only play voice on the local desktop,
+            # and only when the client is not playing the reply itself.
+            if (
+                VOICE_AVAILABLE
+                and voice_output
+                and not req.client_tts
+                and os.getenv("ATLAS_CLOUD", "0") != "1"
+            ):
                 threading.Thread(
                     target=voice_output.speak,
                     args=(response, "auto"),

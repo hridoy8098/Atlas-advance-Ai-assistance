@@ -97,6 +97,9 @@ export const lockSystem = () => api.post('/auth/logout').then(r => r.data)
 export const sendCommand = (command, platform) => api.post('/command', {
   command,
   platform: platform || (isNativeApp() ? nativePlatform() : 'desktop'),
+  // The browser/WebView plays the Edge TTS reply, so don't double-play it on
+  // the laptop speakers when the API is running locally.
+  client_tts: true,
 }, { timeout: 180000 }).then(r => r.data)
 
 // ===== VOICE =====
