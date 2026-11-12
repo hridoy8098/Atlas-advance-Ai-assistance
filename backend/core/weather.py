@@ -1,12 +1,16 @@
 """Key-free weather lookup shared by the API and the voice command handler.
 
-OpenWeatherMap rejected the configured key with 401, so `/api/system/weather`
-silently fell back to hard-coded values. Open-Meteo needs no key and returns
-current temperature, feels-like, humidity and wind. Geocoding is used for
-cities that are not in the small built-in table.
+OpenWeatherMap rejected the configured key with 401, and Render's shared egress
+IP quickly exhausts Open-Meteo's free daily quota. The lookup therefore tries a
+small chain of key-free providers:
+
+1. Open-Meteo  - fast and structured (temperatures, humidity, wind)
+2. wttr.in     - also provides feels-like temperature
+3. MET Norway  - government service, needs a descriptive User-Agent
 """
 
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 
@@ -16,12 +20,15 @@ LAST_ERROR: Dict[str, Any] = {}
 
 
 def _fail(stage: str, message: Any, status: Optional[int] = None) -> None:
-    LAST_ERROR.clear()
-    LAST_ERROR.update({
+    entry = {
         "stage": stage,
         "status": status,
         "message": str(message)[:300],
-    })
+    }
+    attempts = LAST_ERROR.setdefault("attempts", [])
+    attempts.append(entry)
+    del attempts[:-5]
+    LAST_ERROR.update(entry)
 
 
 # name -> (display name, latitude, longitude)
@@ -101,6 +108,72 @@ _DESCRIPTIONS_BN = {
 }
 
 
+def _describe_bn(text: str) -> str:
+    """Best-effort Bengali label for a provider's free-form description."""
+    value = (text or "").lower()
+    if "thunder" in value:
+        return "বজ্রঝড়"
+    if "heavy rain" in value:
+        return "ভারী বৃষ্টি"
+    if "moderate rain" in value:
+        return "মাঝারি বৃষ্টি"
+    if "light rain" in value or "drizzle" in value or "patchy rain" in value:
+        return "হালকা বৃষ্টি"
+    if "rain" in value:
+        return "বৃষ্টি"
+    if "heavy snow" in value:
+        return "ভারী তুষারপাত"
+    if "snow" in value or "sleet" in value:
+        return "তুষারপাত"
+    if "fog" in value or "mist" in value:
+        return "কুয়াশা"
+    if "haze" in value or "smoke" in value:
+        return "ধোঁয়াশা"
+    if "overcast" in value:
+        return "মেঘাচ্ছন্ন"
+    if "partly" in value:
+        return "আংশিক মেঘলা"
+    if "cloud" in value:
+        return "মেঘলা"
+    if "clear" in value or "sunny" in value:
+        return "পরিষ্কার আকাশ"
+    return "অজানা"
+
+
+def _symbol_description(symbol: str) -> str:
+    """Turn a MET Norway symbol (clearsky_day, heavyrain, ...) into text."""
+    value = (symbol or "").lower()
+    for suffix in ("_day", "_night", "_polartwilight"):
+        value = value.replace(suffix, "")
+    mapping = {
+        "clearsky": "Clear sky",
+        "fair": "Mainly clear",
+        "partlycloudy": "Partly cloudy",
+        "cloudy": "Cloudy",
+        "fog": "Fog",
+        "lightrain": "Light rain",
+        "rain": "Rain",
+        "heavyrain": "Heavy rain",
+        "lightrainshowers": "Light rain showers",
+        "rainshowers": "Rain showers",
+        "heavyrainshowers": "Heavy rain showers",
+        "lightsleet": "Light sleet",
+        "sleet": "Sleet",
+        "heavysleet": "Heavy sleet",
+        "lightsnow": "Light snow",
+        "snow": "Snow",
+        "heavysnow": "Heavy snow",
+        "lightsnowshowers": "Light snow showers",
+        "snowshowers": "Snow showers",
+        "heavysnowshowers": "Heavy snow showers",
+        "rainandthunder": "Thunderstorm",
+        "rainshowersandthunder": "Thunderstorm with rain showers",
+        "sleetandthunder": "Thunderstorm with sleet",
+        "snowandthunder": "Thunderstorm with snow",
+    }
+    return mapping.get(value, value.replace("_", " ").title() or "Unknown")
+
+
 def _geocode(city: str, timeout: float) -> Optional[Tuple[str, float, float]]:
     try:
         response = requests.get(
@@ -132,21 +205,7 @@ def _geocode(city: str, timeout: float) -> Optional[Tuple[str, float, float]]:
         return None
 
 
-def get_weather(city: str = "Dhaka", timeout: float = 6) -> Optional[dict]:
-    """Return current weather for `city`, or None when it cannot be resolved."""
-    city = (city or "Dhaka").strip()
-    if not city:
-        city = "Dhaka"
-
-    known = _CITY_COORDS.get(city.lower())
-    if known:
-        resolved, latitude, longitude = known
-    else:
-        geocoded = _geocode(city, timeout)
-        if not geocoded:
-            return None
-        resolved, latitude, longitude = geocoded
-
+def _open_meteo(resolved: str, latitude: float, longitude: float, timeout: float) -> Optional[dict]:
     try:
         response = requests.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -163,18 +222,10 @@ def get_weather(city: str = "Dhaka", timeout: float = 6) -> Optional[dict]:
             timeout=timeout,
         )
         if response.status_code != 200:
-            print(f"⚠️ Open-Meteo returned {response.status_code} for {city}")
-            _fail("forecast", response.text[:200], response.status_code)
+            _fail("open-meteo", response.text[:200], response.status_code)
             return None
         current = (response.json() or {}).get("current") or {}
-    except Exception as exc:
-        print(f"⚠️ Open-Meteo lookup failed for {city}: {exc}")
-        _fail("forecast", repr(exc))
-        return None
-
-    try:
         code = int(current.get("weather_code", -1))
-        LAST_ERROR.clear()
         return {
             "temp": round(float(current["temperature_2m"])),
             "feels_like": round(float(current["apparent_temperature"])),
@@ -186,6 +237,126 @@ def get_weather(city: str = "Dhaka", timeout: float = 6) -> Optional[dict]:
             "source": "open-meteo",
         }
     except (KeyError, TypeError, ValueError) as exc:
-        print(f"⚠️ Incomplete weather data for {city}: {exc}")
-        _fail("forecast", repr(exc))
+        _fail("open-meteo", repr(exc))
         return None
+    except Exception as exc:
+        print(f"⚠️ Open-Meteo lookup failed for {resolved}: {exc}")
+        _fail("open-meteo", repr(exc))
+        return None
+
+
+def _wttr(city: str, display_city: str, timeout: float) -> Optional[dict]:
+    try:
+        response = requests.get(
+            f"https://wttr.in/{quote(city)}",
+            params={"format": "j1"},
+            headers={"User-Agent": "AtlasAssistant/7.0"},
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            _fail("wttr.in", response.text[:200], response.status_code)
+            return None
+        body = response.json() or {}
+        current = (body.get("current_condition") or [{}])[0]
+        desc = ((current.get("weatherDesc") or [{}])[0].get("value") or "Unknown").strip()
+
+        return {
+            "temp": round(float(current["temp_C"])),
+            "feels_like": round(float(current.get("FeelsLikeC", current["temp_C"]))),
+            "humidity": int(current["humidity"]),
+            "wind": round(float(current.get("windspeedKmph", 0)) / 3.6, 1),
+            "desc": desc,
+            "desc_bn": _describe_bn(desc),
+            # wttr's nearest_area can be a neighbourhood (e.g. "Ahybnagar"
+            # for Dhaka), which is confusing in a voice reply.
+            "city": display_city or city,
+            "source": "wttr.in",
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail("wttr.in", repr(exc))
+        return None
+    except Exception as exc:
+        print(f"⚠️ wttr.in lookup failed for {city}: {exc}")
+        _fail("wttr.in", repr(exc))
+        return None
+
+
+def _met_no(resolved: str, latitude: float, longitude: float, timeout: float) -> Optional[dict]:
+    try:
+        response = requests.get(
+            "https://api.met.no/weatherapi/locationforecast/2.0/compact",
+            params={"lat": latitude, "lon": longitude},
+            headers={
+                "User-Agent": (
+                    "AtlasAssistant/7.0 "
+                    "github.com/hridoy8098/Atlas-advance-Ai-assistance"
+                )
+            },
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            _fail("met.no", response.text[:200], response.status_code)
+            return None
+        series = (((response.json() or {}).get("properties") or {}).get("timeseries") or [])
+        if not series:
+            _fail("met.no", "empty timeseries")
+            return None
+        details = (((series[0].get("data") or {}).get("instant") or {}).get("details") or {})
+        symbol = (
+            (((series[0].get("data") or {}).get("next_1_hours") or {})
+             .get("summary") or {})
+            .get("symbol_code") or ""
+        )
+        desc = _symbol_description(symbol)
+        temperature = float(details["air_temperature"])
+        return {
+            "temp": round(temperature),
+            # MET Norway has no apparent temperature; the real value is still
+            # reported separately so the UI keeps working.
+            "feels_like": round(temperature),
+            "humidity": int(details.get("relative_humidity", 0)),
+            "wind": round(float(details.get("wind_speed", 0)), 1),
+            "desc": desc,
+            "desc_bn": _describe_bn(desc),
+            "city": resolved,
+            "source": "met.no",
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail("met.no", repr(exc))
+        return None
+    except Exception as exc:
+        print(f"⚠️ MET Norway lookup failed for {resolved}: {exc}")
+        _fail("met.no", repr(exc))
+        return None
+
+
+def get_weather(city: str = "Dhaka", timeout: float = 6) -> Optional[dict]:
+    """Return current weather for `city`, or None when every provider fails."""
+    city = (city or "Dhaka").strip()
+    if not city:
+        city = "Dhaka"
+
+    known = _CITY_COORDS.get(city.lower())
+    if known:
+        resolved, latitude, longitude = known
+    else:
+        geocoded = _geocode(city, timeout)
+        if geocoded:
+            resolved, latitude, longitude = geocoded
+        else:
+            resolved, latitude, longitude = city, None, None
+
+    providers = []
+    if latitude is not None and longitude is not None:
+        providers.append(lambda: _open_meteo(resolved, latitude, longitude, timeout))
+    providers.append(lambda: _wttr(city, resolved, timeout))
+    if latitude is not None and longitude is not None:
+        providers.append(lambda: _met_no(resolved, latitude, longitude, timeout))
+
+    for provider in providers:
+        result = provider()
+        if result:
+            LAST_ERROR.clear()
+            return result
+
+    return None
