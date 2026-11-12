@@ -394,27 +394,19 @@ async def get_metrics():
                 "bat_percent": -1, "bat_charging": False}
 
 @app.get("/api/system/weather")
-async def get_weather():
-    try:
-        import requests as req_lib
-        api_key = config.WEATHER_API_KEY
-        if api_key and "your" not in api_key.lower() and "xxx" not in api_key.lower():
-            url = f"https://api.openweathermap.org/data/2.5/weather?q={config.DEFAULT_CITY}&appid={api_key}&units=metric"
-            resp = req_lib.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                return {
-                    "temp": round(data["main"]["temp"], 1),
-                    "feels_like": round(data["main"].get("feels_like", data["main"]["temp"]), 1),
-                    "desc": data["weather"][0]["description"],
-                    "icon": data["weather"][0].get("icon", ""),
-                    "humidity": data["main"]["humidity"],
-                    "wind": data["wind"]["speed"],
-                    "city": config.DEFAULT_CITY
-                }
-    except:
-        pass
-    return {"temp": 30, "feels_like": 30, "desc": "Partly Cloudy", "humidity": 65, "wind": 12, "city": config.DEFAULT_CITY}
+async def get_weather(city: str = ""):
+    from backend.core.weather import get_weather as fetch_weather
+
+    result = await run_in_threadpool(fetch_weather, city or config.DEFAULT_CITY)
+    if result:
+        return result
+    # A 503 lets the client keep its previous reading instead of replacing it
+    # with the old placeholder values (30°C / Partly Cloudy) that were shown
+    # even when the upstream key had expired.
+    return JSONResponse(
+        status_code=503,
+        content={"success": False, "error": "Weather service unavailable"},
+    )
 
 @app.get("/api/system/prayer-times")
 async def get_prayer_times():
@@ -872,6 +864,7 @@ async def health():
         "whisper_model": WHISPER_MODEL,
         "voice_duplex": True,
         "stt_strategy": "dual-pass-confidence",
+        "weather_source": "open-meteo",
     }
 
 # ===== STARTUP =====

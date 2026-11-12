@@ -2,13 +2,13 @@
 # এটি AgentOrchestrator এর সাথে কানেক্ট করে
 
 import time
-import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any
 
 import config
 from backend.agent.agent_orchestrator import agent_orchestrator
+from backend.core.weather import get_weather as fetch_weather
 from backend.core.ai_engine import ai_engine
 from backend.core.memory import memory_manager
 from backend.core.language import language_detector
@@ -217,58 +217,84 @@ def handle_info_command(intent: str, command: str, entities: Dict[str, Any]) -> 
         now = datetime.now()
 
     if intent == "info_time":
+        if bengali:
+            hour, minute = now.hour, now.minute
+            if 4 <= hour < 6:
+                period = "ভোর"
+            elif 6 <= hour < 12:
+                period = "সকাল"
+            elif 12 <= hour < 16:
+                period = "দুপুর"
+            elif 16 <= hour < 18:
+                period = "বিকাল"
+            elif 18 <= hour < 20:
+                period = "সন্ধ্যা"
+            else:
+                period = "রাত"
+            hour12 = hour % 12 or 12
+            if minute == 0:
+                return f"এখন {period} {hour12}টা বাজে।"
+            return f"এখন {period} {hour12}টা {minute} মিনিট।"
         clock = now.strftime("%I:%M %p").lstrip("0")
-        return f"এখন {clock} বাজে।" if bengali else f"It's {clock}."
+        return f"It's {clock}."
 
     if intent == "info_date":
+        if bengali:
+            days = ["সোমবার", "মঙ্গলবার", "বুধবার", "বৃহস্পতিবার", "শুক্রবার", "শনিবার", "রবিবার"]
+            months = [
+                "জানুয়ারি", "ফেব্রুয়ারি", "মার্চ", "এপ্রিল", "মে", "জুন",
+                "জুলাই", "আগস্ট", "সেপ্টেম্বর", "অক্টোবর", "নভেম্বর", "ডিসেম্বর",
+            ]
+            return f"আজ {days[now.weekday()]}, {now.day} {months[now.month - 1]} {now.year}।"
         date_text = now.strftime("%A, %d %B %Y")
-        return f"আজ {date_text}।" if bengali else f"Today is {date_text}."
+        return f"Today is {date_text}."
 
     if intent != "info_weather":
         return ""
 
-    key = getattr(config, "WEATHER_API_KEY", "") or ""
-    if not key:
-        return ""
-
     default_city = getattr(config, "DEFAULT_CITY", "Dhaka") or "Dhaka"
     location = str(entities.get("location") or "").strip(" ?.,!।")
+    for prefix in ("in ", "at ", "of ", "for "):
+        if location.lower().startswith(prefix):
+            location = location[len(prefix):].strip(" ?.,!।")
+
     city_aliases = {
-        "ঢাকা": "Dhaka", "ঢাকায়": "Dhaka",
-        "লন্ডন": "London", "লন্ডনে": "London",
-        "কলকাতা": "Kolkata", "কলকাতায়": "Kolkata",
-        "দিল্লি": "Delhi", "দিল্লিতে": "Delhi",
+        "ঢাকা": "Dhaka", "ঢাকায়": "Dhaka", "ঢাকার": "Dhaka",
+        "লন্ডন": "London", "লন্ডনে": "London", "লন্ডনের": "London",
+        "কলকাতা": "Kolkata", "কলকাতায়": "Kolkata", "কলকাতার": "Kolkata",
+        "দিল্লি": "Delhi", "দিল্লিতে": "Delhi", "দিল্লির": "Delhi",
+        "চট্টগ্রাম": "Chittagong", "সিলেট": "Sylhet",
     }
-    location = city_aliases.get(location, location)
+    for alias, english in city_aliases.items():
+        if alias in command:
+            location = english
+            break
     if location.lower() in ("", "today", "now", "এখন", "আজ", "আমার", "my"):
         location = ""
 
     candidates = [location, default_city] if location and location.lower() != default_city.lower() else [default_city]
     for city in candidates:
-        try:
-            response = requests.get(
-                "https://api.openweathermap.org/data/2.5/weather",
-                params={"q": city, "appid": key, "units": "metric"},
-                timeout=6,
-            )
-            if response.status_code != 200:
-                continue
-            data = response.json()
-            temp = round(data["main"]["temp"])
-            feels = round(data["main"]["feels_like"])
-            humidity = data["main"]["humidity"]
-            desc = data["weather"][0]["description"]
-        except Exception as exc:
-            print(f"⚠️ Weather lookup failed ({city}): {exc}")
+        weather = fetch_weather(city)
+        if not weather:
             continue
 
+        temp = weather["temp"]
+        feels = weather["feels_like"]
+        humidity = weather["humidity"]
+        city_name = weather["city"]
         if bengali:
+            city_bn = {
+                "Dhaka": "ঢাকায়", "Chittagong": "চট্টগ্রামে", "Sylhet": "সিলেটে",
+                "Kolkata": "কলকাতায়", "Delhi": "দিল্লিতে", "London": "লন্ডনে",
+                "New York": "নিউইয়র্কে", "Tokyo": "টোকিওতে", "Dubai": "দুবাইয়ে",
+            }
+            place = city_bn.get(city_name, f"{city_name}-এ")
             return (
-                f"{city}-এ এখন {temp}°C, {desc}। "
+                f"{place} এখন {temp}°C, {weather['desc_bn']}। "
                 f"অনুভূত হচ্ছে {feels}°C, আর্দ্রতা {humidity}%।"
             )
         return (
-            f"It's {temp}°C in {city} with {desc}. "
+            f"It's {temp}°C in {city_name} with {weather['desc'].lower()}. "
             f"Feels like {feels}°C, humidity {humidity}%."
         )
 
