@@ -612,8 +612,17 @@ VOICE_LANG_MAP = {
 VOICE_LANGS = {"bn", "en", "hi", "ur", "ar", "es", "fr", "de", "ru", "zh", "ja", "ko"}
 
 
-def _groq_audio_key() -> str:
-    return (os.getenv("GROQ_KEY_1") or os.getenv("GROQ_API_KEY") or "").strip()
+def _groq_audio_keys() -> list:
+    """All configured Groq keys, in preference order (max 10)."""
+    keys = []
+    for index in range(1, 11):
+        candidate = (os.getenv(f"GROQ_KEY_{index}") or "").strip()
+        if candidate and candidate not in keys:
+            keys.append(candidate)
+    fallback = (os.getenv("GROQ_API_KEY") or "").strip()
+    if fallback and fallback not in keys:
+        keys.append(fallback)
+    return keys
 
 
 # Turbo is fine for English but auto-detect is unreliable for short Bengali
@@ -636,8 +645,11 @@ def _latin_ratio(text: str) -> float:
     return sum(1 for ch in letters if ch.isascii()) / len(letters)
 
 
-def _groq_transcribe(data: bytes, ext: str, content_type: str, key: str, language: str = "") -> dict:
-    """One Whisper request. Returns {success, text, detected, confidence, error}."""
+def _groq_transcribe(data: bytes, ext: str, content_type: str, keys: list, language: str = "") -> dict:
+    """One Whisper request, rotating keys on rate limits/auth errors.
+
+    Returns {success, text, detected, confidence, error}.
+    """
     import requests
 
     payload = {
@@ -648,26 +660,38 @@ def _groq_transcribe(data: bytes, ext: str, content_type: str, key: str, languag
     if language:
         payload["language"] = language
 
-    try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {key}"},
-            files={"file": (f"voice.{ext}", data, content_type)},
-            data=payload,
-            timeout=90,
-        )
-    except Exception as exc:
-        print(f"❌ Groq STT request failed: {exc}")
-        return {"success": False, "error": "Transcription service unreachable"}
+    last_error = {"success": False, "error": "Transcription failed"}
+    for key in keys[:3]:
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {key}"},
+                files={"file": (f"voice.{ext}", data, content_type)},
+                data=payload,
+                timeout=90,
+            )
+        except Exception as exc:
+            print(f"❌ Groq STT request failed: {exc}")
+            last_error = {"success": False, "error": "Transcription service unreachable"}
+            continue
 
-    if response.status_code != 200:
-        print(f"❌ Groq STT {response.status_code}: {response.text[:200]}")
-        return {"success": False, "error": f"Transcription failed ({response.status_code})"}
+        if response.status_code != 200:
+            print(f"❌ Groq STT {response.status_code}: {response.text[:200]}")
+            last_error = {
+                "success": False,
+                "error": f"Transcription failed ({response.status_code})",
+            }
+            if response.status_code in (401, 403, 429) or response.status_code >= 500:
+                continue
+            return last_error
 
-    try:
-        body = response.json()
-    except Exception:
-        body = {}
+        try:
+            body = response.json()
+        except Exception:
+            body = {}
+        break
+    else:
+        return last_error
 
     # Whisper's own confidence for this language guess. `avg_logprob` is
     # duration-weighted so one long segment does not dominate.
@@ -740,8 +764,8 @@ async def voice_transcribe(file: UploadFile = File(...), language: str = Form(""
     if len(data) > 12 * 1024 * 1024:
         return {"success": False, "error": "Recording too large"}
 
-    key = _groq_audio_key()
-    if not key:
+    keys = _groq_audio_keys()
+    if not keys:
         return {"success": False, "error": "GROQ_KEY_1 is not configured"}
 
     lang = (language or "").strip()
@@ -763,7 +787,7 @@ async def voice_transcribe(file: UploadFile = File(...), language: str = Form(""
 
     def _transcribe():
         if lang:
-            result = _groq_transcribe(data, ext, content_type, key, lang)
+            result = _groq_transcribe(data, ext, content_type, keys, lang)
             if not result.get("success"):
                 return result
             text = result.get("text") or ""
@@ -776,8 +800,8 @@ async def voice_transcribe(file: UploadFile = File(...), language: str = Form(""
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            bn_future = pool.submit(_groq_transcribe, data, ext, content_type, key, "bn")
-            en_future = pool.submit(_groq_transcribe, data, ext, content_type, key, "en")
+            bn_future = pool.submit(_groq_transcribe, data, ext, content_type, keys, "bn")
+            en_future = pool.submit(_groq_transcribe, data, ext, content_type, keys, "en")
             bn_result = bn_future.result()
             en_result = en_future.result()
 

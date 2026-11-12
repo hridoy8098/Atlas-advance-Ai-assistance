@@ -20,6 +20,34 @@ iOS does not allow third-party WhatsApp UI automation. Atlas opens the chat and
 the user taps the call button once. This is an OS restriction, not a missing
 feature in Atlas.
 
+## Voice input and replies
+
+Android WebView has no usable Web Speech API, so the phone records audio itself
+and lets the server do the speech work:
+
+1. Tap the microphone. `MediaRecorder` starts and the UI shows the listening
+   state. Recording stops automatically after ~1.4 s of silence, or after 12 s.
+2. The clip is uploaded to `POST /api/voice/transcribe`. The server runs Groq
+   Whisper `whisper-large-v3` twice in parallel, once with `language=bn` and
+   once with `language=en`, then keeps the pass with the higher average
+   log-probability. Forcing English on Bengali audio can produce a fluent
+   English translation, so the confidence score is safer than checking the
+   script of the text.
+3. The transcript is sent to `POST /api/command` like a typed message. Time,
+   date and weather are answered locally; everything else goes to the AI.
+4. The reply is rendered to MP3 by `POST /api/voice/tts` (Edge TTS) and played
+   through an `<audio>` element in the phone's speaker.
+
+Settings -> **Voice language** has three choices:
+
+- **Auto** (default): the dual-pass detector above. Best when you mix Bengali
+  and English.
+- **বাংলা**: sends `language=bn-BD`; one Whisper pass, slightly faster.
+- **English**: sends `language=en-US`; one Whisper pass, slightly faster.
+
+The microphone permission must be granted the first time. The phone does not
+need the laptop microphone, and `ATLAS_VOICE_AUTOSTART` does not affect it.
+
 ## Android build
 
 Requirements: JDK 17+ (21 works), Android SDK (platform 35, build-tools 35),
