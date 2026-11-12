@@ -6,9 +6,22 @@ current temperature, feels-like, humidity and wind. Geocoding is used for
 cities that are not in the small built-in table.
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import requests
+
+
+# Updated on every failure so the API can explain why a lookup returned 503.
+LAST_ERROR: Dict[str, Any] = {}
+
+
+def _fail(stage: str, message: Any, status: Optional[int] = None) -> None:
+    LAST_ERROR.clear()
+    LAST_ERROR.update({
+        "stage": stage,
+        "status": status,
+        "message": str(message)[:300],
+    })
 
 
 # name -> (display name, latitude, longitude)
@@ -96,13 +109,16 @@ def _geocode(city: str, timeout: float) -> Optional[Tuple[str, float, float]]:
             timeout=timeout,
         )
         if response.status_code != 200:
+            _fail("geocode", response.text[:200], response.status_code)
             return None
         results = (response.json() or {}).get("results") or []
     except Exception as exc:
         print(f"⚠️ Weather geocoding failed for {city}: {exc}")
+        _fail("geocode", repr(exc))
         return None
 
     if not results:
+        _fail("geocode", f"No results for {city}")
         return None
     best = results[0]
     try:
@@ -111,7 +127,8 @@ def _geocode(city: str, timeout: float) -> Optional[Tuple[str, float, float]]:
             float(best["latitude"]),
             float(best["longitude"]),
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail("geocode", repr(exc))
         return None
 
 
@@ -147,14 +164,17 @@ def get_weather(city: str = "Dhaka", timeout: float = 6) -> Optional[dict]:
         )
         if response.status_code != 200:
             print(f"⚠️ Open-Meteo returned {response.status_code} for {city}")
+            _fail("forecast", response.text[:200], response.status_code)
             return None
         current = (response.json() or {}).get("current") or {}
     except Exception as exc:
         print(f"⚠️ Open-Meteo lookup failed for {city}: {exc}")
+        _fail("forecast", repr(exc))
         return None
 
     try:
         code = int(current.get("weather_code", -1))
+        LAST_ERROR.clear()
         return {
             "temp": round(float(current["temperature_2m"])),
             "feels_like": round(float(current["apparent_temperature"])),
@@ -167,4 +187,5 @@ def get_weather(city: str = "Dhaka", timeout: float = 6) -> Optional[dict]:
         }
     except (KeyError, TypeError, ValueError) as exc:
         print(f"⚠️ Incomplete weather data for {city}: {exc}")
+        _fail("forecast", repr(exc))
         return None

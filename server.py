@@ -395,9 +395,9 @@ async def get_metrics():
 
 @app.get("/api/system/weather")
 async def get_weather(city: str = ""):
-    from backend.core.weather import get_weather as fetch_weather
+    from backend.core import weather
 
-    result = await run_in_threadpool(fetch_weather, city or config.DEFAULT_CITY)
+    result = await run_in_threadpool(weather.get_weather, city or config.DEFAULT_CITY)
     if result:
         return result
     # A 503 lets the client keep its previous reading instead of replacing it
@@ -405,7 +405,11 @@ async def get_weather(city: str = ""):
     # even when the upstream key had expired.
     return JSONResponse(
         status_code=503,
-        content={"success": False, "error": "Weather service unavailable"},
+        content={
+            "success": False,
+            "error": "Weather service unavailable",
+            "detail": dict(weather.LAST_ERROR),
+        },
     )
 
 @app.get("/api/system/prayer-times")
