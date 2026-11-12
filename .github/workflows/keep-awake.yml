@@ -1,31 +1,39 @@
 name: Keep Atlas API awake
 
-# Render's free tier sleeps after 15 idle minutes and takes ~50 s to wake.
-# A light ping every 5 minutes keeps the instance warm so voice replies stay
-# fast. The endpoint is public and returns a tiny JSON body.
+# Render's free tier sleeps after 15 idle minutes and then takes ~50 s to wake.
+# GitHub's 5-minute cron is heavily throttled, so instead each scheduled run
+# stays alive for ~5 h 50 min and pings every 5 minutes. Runs are scheduled
+# every 4 hours, which gives ~1 h 50 min of overlap and keeps the API warm even
+# when GitHub starts a run late. Public repositories have free Actions minutes.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 */4 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  ping:
+  keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 355
     steps:
-      - name: Ping /api/health
+      - name: Ping /api/health every 5 minutes
         run: |
-          for attempt in 1 2 3; do
+          end=$((SECONDS + 350 * 60))
+          while [ "$SECONDS" -lt "$end" ]; do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 55 \
               https://atlas-7-api.onrender.com/api/health || true)
-            echo "attempt $attempt -> HTTP $code"
-            if [ "$code" = "200" ]; then
-              exit 0
+            echo "$(date -u +%H:%M:%S) -> HTTP $code"
+
+            # A cold start can exceed the first timeout. Retry once before
+            # waiting for the next five-minute slot.
+            if [ "$code" != "200" ]; then
+              sleep 20
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 55 \
+                https://atlas-7-api.onrender.com/api/health || true)
+              echo "$(date -u +%H:%M:%S) -> retry HTTP $code"
             fi
-            sleep 10
+
+            sleep 300
           done
-          echo "Atlas API did not answer in time"
-          exit 1

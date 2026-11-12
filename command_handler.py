@@ -1,7 +1,13 @@
 # backend/command_handler.py — Atlas 7.0 Agent Command Handler
 # এটি AgentOrchestrator এর সাথে কানেক্ট করে
 
+import time
+import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, Any
+
+import config
 from backend.agent.agent_orchestrator import agent_orchestrator
 from backend.core.ai_engine import ai_engine
 from backend.core.memory import memory_manager
@@ -29,6 +35,11 @@ def handle_agent_command(command: str, parsed: Dict, return_result: bool = False
 
     if result.get("success", False):
         message = result.get("message", "Command executed successfully.")
+    # An agent that simply does not implement this intent should not leak a
+    # raw "Command not supported" string into the voice reply.
+    elif "not supported" in str(result.get("message", "")).lower():
+        message = handle_ai_fallback(command)
+        agent_result = {}
     # A registered agent may intentionally return a helpful failure
     # (disabled toggle, missing contact, setup needed). Don't hide it
     # behind the generic AI fallback.
@@ -186,6 +197,84 @@ def is_agent_command(parsed: Dict) -> bool:
     return any(keyword in intent or keyword in command for keyword in agent_keywords)
 
 
+def handle_info_command(intent: str, command: str, entities: Dict[str, Any]) -> str:
+    """Answer time/date/weather locally.
+
+    These used to be routed to WebAgent, which has no info handler and returned
+    a raw "Command not supported" string. A direct answer is faster and works on
+    the free cloud instance, where a browser cannot be opened.
+    """
+    try:
+        lang = language_detector.detect(command)
+    except Exception:
+        lang = "en"
+    bengali = lang in ("bn", "banglish", "mixed")
+
+    tz_name = getattr(config, "TIMEZONE", "Asia/Dhaka") or "Asia/Dhaka"
+    try:
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        now = datetime.now()
+
+    if intent == "info_time":
+        clock = now.strftime("%I:%M %p").lstrip("0")
+        return f"এখন {clock} বাজে।" if bengali else f"It's {clock}."
+
+    if intent == "info_date":
+        date_text = now.strftime("%A, %d %B %Y")
+        return f"আজ {date_text}।" if bengali else f"Today is {date_text}."
+
+    if intent != "info_weather":
+        return ""
+
+    key = getattr(config, "WEATHER_API_KEY", "") or ""
+    if not key:
+        return ""
+
+    default_city = getattr(config, "DEFAULT_CITY", "Dhaka") or "Dhaka"
+    location = str(entities.get("location") or "").strip(" ?.,!।")
+    city_aliases = {
+        "ঢাকা": "Dhaka", "ঢাকায়": "Dhaka",
+        "লন্ডন": "London", "লন্ডনে": "London",
+        "কলকাতা": "Kolkata", "কলকাতায়": "Kolkata",
+        "দিল্লি": "Delhi", "দিল্লিতে": "Delhi",
+    }
+    location = city_aliases.get(location, location)
+    if location.lower() in ("", "today", "now", "এখন", "আজ", "আমার", "my"):
+        location = ""
+
+    candidates = [location, default_city] if location and location.lower() != default_city.lower() else [default_city]
+    for city in candidates:
+        try:
+            response = requests.get(
+                "https://api.openweathermap.org/data/2.5/weather",
+                params={"q": city, "appid": key, "units": "metric"},
+                timeout=6,
+            )
+            if response.status_code != 200:
+                continue
+            data = response.json()
+            temp = round(data["main"]["temp"])
+            feels = round(data["main"]["feels_like"])
+            humidity = data["main"]["humidity"]
+            desc = data["weather"][0]["description"]
+        except Exception as exc:
+            print(f"⚠️ Weather lookup failed ({city}): {exc}")
+            continue
+
+        if bengali:
+            return (
+                f"{city}-এ এখন {temp}°C, {desc}। "
+                f"অনুভূত হচ্ছে {feels}°C, আর্দ্রতা {humidity}%।"
+            )
+        return (
+            f"It's {temp}°C in {city} with {desc}. "
+            f"Feels like {feels}°C, humidity {humidity}%."
+        )
+
+    return ""
+
+
 def get_command_response(command: str, platform: str = "desktop") -> dict:
     """
     Main entry point for processing user commands
@@ -194,7 +283,9 @@ def get_command_response(command: str, platform: str = "desktop") -> dict:
     if not command:
         return {"response": "কিছু বলুন...", "success": False}
 
-    # Step 1: Classify intent using AI + fallback
+    started = time.perf_counter()
+
+    # Step 1: Classify intent (local layers first, AI only when ambiguous)
     parsed = classify_intent(command)
     parsed['original_command'] = command
     entities = parsed.setdefault('entities', {})
@@ -202,10 +293,14 @@ def get_command_response(command: str, platform: str = "desktop") -> dict:
 
     # Step 2: Route to appropriate handler
     agent_result: Dict[str, Any] = {}
-    if is_agent_command(parsed):
-        response_text, agent_result = handle_agent_command(command, parsed, return_result=True)
-    else:
+    if parsed.get("intent") in ("info_weather", "info_time", "info_date"):
+        response_text = handle_info_command(parsed["intent"], command, entities)
+        if not response_text:
+            response_text = handle_ai_fallback(command)
+    elif parsed.get("method") == "fast" or not is_agent_command(parsed):
         response_text = handle_ai_fallback(command)
+    else:
+        response_text, agent_result = handle_agent_command(command, parsed, return_result=True)
 
     # Step 3: Save to memory
     try:
@@ -227,7 +322,8 @@ def get_command_response(command: str, platform: str = "desktop") -> dict:
         "confidence": parsed.get('confidence', 0),
         "method": parsed.get('method', 'unknown'),
         "entities": parsed.get('entities', {}),
-        "success": True
+        "success": True,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
     }
 
     # Phone bridge needs the structured action, not only the text reply.

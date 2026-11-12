@@ -620,6 +620,93 @@ def _groq_audio_key() -> str:
     return (os.getenv("GROQ_KEY_1") or os.getenv("GROQ_API_KEY") or "").strip()
 
 
+# Turbo is fine for English but auto-detect is unreliable for short Bengali
+# clips (it often guesses Gujarati/Danish). large-v3 + a forced language is far
+# more accurate and is still under a second for the short clips the app sends.
+WHISPER_MODEL = (os.getenv("GROQ_WHISPER_MODEL") or "whisper-large-v3").strip()
+
+
+def _letter_ratio(text: str, first: str, last: str) -> float:
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for ch in letters if first <= ch <= last) / len(letters)
+
+
+def _latin_ratio(text: str) -> float:
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for ch in letters if ch.isascii()) / len(letters)
+
+
+def _groq_transcribe(data: bytes, ext: str, content_type: str, key: str, language: str = "") -> dict:
+    """One Whisper request. Returns {success, text, detected, error}."""
+    import requests
+
+    payload = {
+        "model": WHISPER_MODEL,
+        "response_format": "verbose_json",
+        "temperature": "0",
+    }
+    if language:
+        payload["language"] = language
+
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {key}"},
+            files={"file": (f"voice.{ext}", data, content_type)},
+            data=payload,
+            timeout=90,
+        )
+    except Exception as exc:
+        print(f"❌ Groq STT request failed: {exc}")
+        return {"success": False, "error": "Transcription service unreachable"}
+
+    if response.status_code != 200:
+        print(f"❌ Groq STT {response.status_code}: {response.text[:200]}")
+        return {"success": False, "error": f"Transcription failed ({response.status_code})"}
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+
+    return {
+        "success": True,
+        "text": str(body.get("text") or "").strip(),
+        "detected": str(body.get("language") or "").strip(),
+    }
+
+
+def _pick_auto_transcript(bn_result: dict, en_result: dict):
+    """Choose between the Bengali and English passes.
+
+    Whisper's own auto-detect failed on Bengali test clips. Forcing both
+    languages and checking the script is deterministic: English speech comes
+    back as Latin under `en`, while Bengali under `en` comes back as Gujarati
+    (or another Indic script) and scores zero on the Latin ratio.
+    """
+    bn_text = (bn_result.get("text") or "").strip()
+    en_text = (en_result.get("text") or "").strip()
+
+    if not bn_text and not en_text:
+        return None
+    if not bn_text:
+        return en_text, "en"
+    if not en_text:
+        return bn_text, "bn"
+
+    if _latin_ratio(en_text) >= 0.55:
+        return en_text, "en"
+    if _letter_ratio(bn_text, "\u0980", "\u09ff") >= 0.45:
+        return bn_text, "bn"
+
+    # Mixed/noisy audio: the longer transcript is usually the real one.
+    return (en_text, "en") if len(en_text) >= len(bn_text) else (bn_text, "bn")
+
+
 @app.post("/api/voice/transcribe")
 async def voice_transcribe(file: UploadFile = File(...), language: str = Form("")):
     """Transcribe a clip recorded by the phone or browser (Groq Whisper)."""
@@ -651,36 +738,33 @@ async def voice_transcribe(file: UploadFile = File(...), language: str = Form(""
     }.get(content_type, "webm")
 
     def _transcribe():
-        import requests
-
-        payload = {
-            "model": "whisper-large-v3-turbo",
-            "response_format": "json",
-            "temperature": "0",
-        }
         if lang:
-            payload["language"] = lang
+            result = _groq_transcribe(data, ext, content_type, key, lang)
+            if not result.get("success"):
+                return result
+            text = result.get("text") or ""
+            if not text:
+                return {"success": False, "error": "No speech detected"}
+            return {"success": True, "text": text, "language": lang}
 
-        try:
-            response = requests.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {key}"},
-                files={"file": (f"voice.{ext}", data, content_type)},
-                data=payload,
-                timeout=90,
-            )
-        except Exception as exc:
-            print(f"❌ Groq STT request failed: {exc}")
-            return {"success": False, "error": "Transcription service unreachable"}
+        # Auto mode: both passes run concurrently, so this costs roughly one
+        # request of latency while removing the wrong-language failures.
+        from concurrent.futures import ThreadPoolExecutor
 
-        if response.status_code != 200:
-            print(f"❌ Groq STT {response.status_code}: {response.text[:200]}")
-            return {"success": False, "error": f"Transcription failed ({response.status_code})"}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            bn_future = pool.submit(_groq_transcribe, data, ext, content_type, key, "bn")
+            en_future = pool.submit(_groq_transcribe, data, ext, content_type, key, "en")
+            bn_result = bn_future.result()
+            en_result = en_future.result()
 
-        text = str(response.json().get("text") or "").strip()
-        if not text:
+        if not bn_result.get("success") and not en_result.get("success"):
+            return bn_result if bn_result.get("error") else en_result
+
+        picked = _pick_auto_transcript(bn_result, en_result)
+        if not picked:
             return {"success": False, "error": "No speech detected"}
-        return {"success": True, "text": text, "language": lang or "auto"}
+        text, detected = picked
+        return {"success": True, "text": text, "language": detected}
 
     return await run_in_threadpool(_transcribe)
 
@@ -756,6 +840,9 @@ async def health():
         "pin_auth": pin_auth is not None,
         "ai_engine": ai_engine is not None,
         "voice": VOICE_AVAILABLE,
+        "ai_primary": getattr(config, "AI_PRIMARY", "gemini"),
+        "whisper_model": WHISPER_MODEL,
+        "voice_duplex": True,
     }
 
 # ===== STARTUP =====

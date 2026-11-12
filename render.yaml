@@ -22,6 +22,10 @@ services:
         value: "1"
       - key: ATLAS_VOICE_AUTOSTART
         value: "0"
+      # Groq is consistently sub-second for short voice replies; Gemini stays
+      # configured as a fallback inside ai_engine.chat if Groq ever fails.
+      - key: AI_PRIMARY
+        value: "groq"
       - key: AUTH_PIN
         sync: false
       - key: GEMINI_API_KEY

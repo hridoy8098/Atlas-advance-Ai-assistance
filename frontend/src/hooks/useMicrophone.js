@@ -160,6 +160,7 @@ export default function useMicrophone({ language = 'auto', onText, onError } = {
     if (AudioCtx) {
       const audioContext = new AudioCtx()
       session.audioContext = audioContext
+      if (audioContext.state === 'suspended') audioContext.resume().catch(() => {})
       const analyser = audioContext.createAnalyser()
       analyser.fftSize = 1024
       audioContext.createMediaStreamSource(stream).connect(analyser)

@@ -77,9 +77,9 @@ ATLAS_CLOUD = os.getenv("ATLAS_CLOUD", "0").strip().lower() in ("1", "true", "ye
 # 🤖 AI MODEL SETTINGS
 # ============================================================
 
-# Primary AI provider: "gemini" (default) or "groq"
-# Gemini slow/blocked hole: AI_PRIMARY=groq diye start koro
-AI_PRIMARY = os.getenv("AI_PRIMARY", "gemini").strip().lower()
+# Primary AI provider: "groq" (default, sub-second for voice) or "gemini".
+# Gemini remains the fallback inside ai_engine.chat if Groq is unavailable.
+AI_PRIMARY = os.getenv("AI_PRIMARY", "groq").strip().lower()
 
 # Gemini (Primary AI) — Gemini আগে, Groq পরে
 GEMINI_CHAT_MODEL = "gemini-3.8-flash"

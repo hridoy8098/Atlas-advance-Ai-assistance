@@ -11,6 +11,25 @@ from typing import Dict, List, Optional, Tuple
 from backend.core.ai_engine import ai_engine
 
 
+# Obvious conversational phrases do not need an LLM round-trip just to be
+# classified as "chat". Matching them locally removes one full AI request from
+# every greeting, which is the most visible latency in the phone voice flow.
+_FAST_CHAT_RE = re.compile(
+    r"^(?:"
+    r"(?:hi|hello|hey|yo|hola|সালাম|হ্যালো|হাই|ওহে)(?:\s+(?:there|atlas|boss|friend))?"
+    r"|(?:how\s+are\s+you|how\s+is\s+it\s+going|what'?s\s+up|কেমন\s+আছো|কেমন\s+আছেন|কি\s+খবর|কী\s+খবর)"
+    r"|(?:good\s+(?:morning|afternoon|evening|night)|শুভ\s+(?:সকাল|সন্ধ্যা|রাত))"
+    r"|(?:thanks|thank\s+you|thx|ধন্যবাদ)"
+    r"|(?:ok|okay|alright|bye|goodbye|see\s+you|বিদায়|আল্লাহ\s+হাফেজ)"
+    r"|(?:who\s+are\s+you|what\s+can\s+you\s+do|help|তুমি\s+কে|আপনি\s+কে)"
+    r"|(?:tell\s+me\s+(?:a\s+)?joke|tell\s+me\s+something)"
+    r"|(?:i\s+(?:am|feel)\s+(?:sad|happy|tired|bored|good|fine))"
+    r"|(?:nice|good\s+job|well\s+done)"
+    r")[\s!.,।?]*$",
+    re.IGNORECASE,
+)
+
+
 class IntentClassifier:
     """Smart intent classification with multi-layer fallback"""
 
@@ -304,38 +323,55 @@ class IntentClassifier:
         command = command.strip()
         cmd_lower = command.lower()
 
-        # Layer 1: Try AI Classification
-        ai_result = self._ai_classify(command)
-        if ai_result and ai_result.get("confidence", 0) >= self.confidence_threshold:
-            ai_result["method"] = "ai"
-            self._update_context(command, ai_result["intent"])
-            return ai_result
-
-        # Layer 2: Regex Pattern Matching (precise)
+        # Layer 1: Regex Pattern Matching (precise, no network)
         regex_result = self._regex_classify(command)
         if regex_result:
             regex_result["method"] = "regex"
             self._update_context(command, regex_result["intent"])
             return regex_result
 
-        # Layer 3: Keyword Scoring
+        # Layer 2: Keyword Scoring (fast, no network)
         keyword_result = self._keyword_classify(command)
         if keyword_result and keyword_result.get("confidence", 0) >= 0.4:
             keyword_result["method"] = "keyword"
             self._update_context(command, keyword_result["intent"])
             return keyword_result
 
-        # Layer 4: Context Awareness
+        # Layer 3: Obvious conversation (no AI classification needed)
+        if self._fast_chat(command):
+            result = {
+                "intent": "chat",
+                "entities": {"query": command},
+                "confidence": 0.95,
+                "method": "fast",
+            }
+            self._update_context(command, "chat")
+            return result
+
+        # Layer 4: AI Classification (only for ambiguous / agent commands)
+        ai_result = self._ai_classify(command)
+        if ai_result and ai_result.get("confidence", 0) >= self.confidence_threshold:
+            ai_result["method"] = "ai"
+            self._update_context(command, ai_result["intent"])
+            return ai_result
+
+        # Layer 5: Context Awareness
         context_result = self._context_classify(command)
         if context_result:
             context_result["method"] = "context"
             self._update_context(command, context_result["intent"])
             return context_result
 
-        # Layer 5: Default fallback
+        # Layer 6: Default fallback
         fallback = self._default_response("unknown", command)
         self._update_context(command, "chat")
         return fallback
+
+    def _fast_chat(self, command: str) -> bool:
+        """True for greetings/thanks/small talk that should go straight to chat."""
+        text = re.sub(r"[^\w\s\u0980-\u09FF']", " ", command.lower())
+        text = re.sub(r"\s+", " ", text).strip()
+        return bool(text and _FAST_CHAT_RE.match(text))
 
     # ========== LAYER 1: AI CLASSIFICATION ==========
 
@@ -459,6 +495,11 @@ If unsure, use "chat" intent with low confidence."""
     def _regex_classify(self, command: str) -> Optional[Dict]:
         """Pattern matching for precise commands"""
         patterns = [
+            # Bengali info queries. The older Bengali patterns below were
+            # saved with broken encoding, so proper Unicode is added explicitly.
+            (r"(?:আজ\s+)?(?:কী|কি)\s+তারিখ|আজ\s+(?:তারিখ|কত\s+তারিখ)|আজ\s+(?:কী|কি)\s+বার", "info_date", None),
+            (r"(?:এখন\s+)?(?:কয়টা|কত)\s+বাজে|এখন\s+সময়\s+কত|সময়\s+কত\s+বাজে", "info_time", None),
+            (r"(?:আজ\s+)?(?:আবহাওয়া|তাপমাত্রা|বৃষ্টি)\s*(?:কেমন|কী|কি)?", "info_weather", None),
             # Open app with explicit app name
             (r"(?:open|launch|start|run|খোল|চালু|ওপেন)\s+(\w+)", "open_app", "app_name"),
             # URL open

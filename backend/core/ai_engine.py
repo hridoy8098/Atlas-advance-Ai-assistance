@@ -266,10 +266,26 @@ class AtlasAI:
             else:
                 groq_only = True              # নির্দিষ্ট Groq model চাওয়া হয়েছে
 
-        # config.AI_PRIMARY=groq হলে Gemini skip (Gemini timeout hole latency কমে)
-        if not gemini_model and getattr(config, "AI_PRIMARY", "gemini") == "groq":
-            groq_only = True
-        
+        # config.AI_PRIMARY=groq: use the fast provider first, but keep Gemini
+        # as a safety net. Skipping Gemini entirely turned a Groq outage into a
+        # canned reply.
+        prefer_groq = bool(
+            not gemini_model
+            and not groq_only
+            and getattr(config, "AI_PRIMARY", "gemini") == "groq"
+        )
+
+        if prefer_groq:
+            if self.groq_key_manager is not None:
+                response = self._groq_chat(message, model, system_prompt, use_history)
+                if response:
+                    return response
+            if self.gemini_key_manager is not None:
+                response = self._gemini_chat(message, system_prompt, use_history, gemini_model)
+                if response:
+                    return response
+            return self._fallback_response(message)
+
         # 1) Gemini first (user priority)
         if not groq_only and self.gemini_key_manager is not None:
             response = self._gemini_chat(message, system_prompt, use_history, gemini_model)
