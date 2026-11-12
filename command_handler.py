@@ -1,6 +1,7 @@
 # backend/command_handler.py — Atlas 7.0 Agent Command Handler
 # এটি AgentOrchestrator এর সাথে কানেক্ট করে
 
+import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -254,9 +255,20 @@ def handle_info_command(intent: str, command: str, entities: Dict[str, Any]) -> 
 
     default_city = getattr(config, "DEFAULT_CITY", "Dhaka") or "Dhaka"
     location = str(entities.get("location") or "").strip(" ?.,!।")
+    # Whisper often appends the rest of the sentence to the captured slot,
+    # e.g. "like today? I am speaking English." Keep the first clause only and
+    # drop filler words so they are not geocoded as a city.
+    location = re.split(r"[?।!]", location, maxsplit=1)[0].strip()
     for prefix in ("in ", "at ", "of ", "for "):
         if location.lower().startswith(prefix):
             location = location[len(prefix):].strip(" ?.,!।")
+    location = re.sub(
+        r"\b(?:like|today|now|currently|outside|weather|speaking)\b",
+        " ",
+        location,
+        flags=re.IGNORECASE,
+    )
+    location = " ".join(location.split()).strip(" ?.,!।")
 
     city_aliases = {
         "ঢাকা": "Dhaka", "ঢাকায়": "Dhaka", "ঢাকার": "Dhaka",

@@ -499,7 +499,7 @@ If unsure, use "chat" intent with low confidence."""
             # saved with broken encoding, so proper Unicode is added explicitly.
             (r"(?:আজ\s+)?(?:কী|কি)\s+তারিখ|আজ\s+(?:তারিখ|কত\s+তারিখ)|আজ\s+(?:কী|কি)\s+বার", "info_date", None),
             (r"(?:এখন\s+)?(?:কয়টা|কত)\s+বাজে|এখন\s+সময়\s+কত|সময়\s+কত\s+বাজে", "info_time", None),
-            (r"(?:আজ\s+)?(?:আবহাওয়া|তাপমাত্রা|বৃষ্টি)\s*(?:কেমন|কী|কি)?", "info_weather", None),
+            (r"(?:আজ\s+)?(?:আবহা\w*|তাপমাত্রা|বৃষ্টি)\s*(?:কেমন|কী|কি)?", "info_weather", None),
             # Open app with explicit app name
             (r"(?:open|launch|start|run|খোল|চালু|ওপেন)\s+(\w+)", "open_app", "app_name"),
             # URL open
