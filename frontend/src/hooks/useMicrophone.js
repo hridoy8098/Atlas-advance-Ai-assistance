@@ -1,4 +1,5 @@
-// useMicrophone.js — record on the phone and let the server transcribe it.
+// useMicrophone.js — record in the browser or phone app and let the server
+// transcribe it.
 //
 // Android WebView does not implement the Web Speech API, and the cloud box has
 // no microphone, so the client records a clip with MediaRecorder and uploads it
@@ -122,9 +123,10 @@ export default function useMicrophone({ language = 'auto', onText, onError } = {
         audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
       })
     } catch (err) {
+      const denied = err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
       onError?.(
-        err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
-          ? 'Microphone permission denied. Phone Settings → Apps → Atlas 7 → Permissions → Microphone.'
+        denied
+          ? 'Microphone permission denied. Browser-er address bar theke mic allow koro; phone hole Settings → Apps → Atlas 7 → Permissions.'
           : 'Microphone পাওয়া যায়নি।'
       )
       return false

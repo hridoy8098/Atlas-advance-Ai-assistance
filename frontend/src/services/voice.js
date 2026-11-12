@@ -5,7 +5,7 @@
 // speechSynthesis voices, so <audio> is the primary path there too. If a
 // desktop browser blocks autoplay or the TTS request fails, we fall back to the
 // built-in speechSynthesis voice instead of staying silent.
-import { fetchSpeech } from './api'
+import { fetchSpeech, isNativeApp } from './api'
 
 let audioEl = null
 let objectUrl = null
@@ -87,6 +87,13 @@ export const speakReply = (text, language = 'auto') => {
   const speakLocally = () => {
     if (!isCurrent() || fellBack) return
     fellBack = true
+
+    // Android WebView exposes speechSynthesis but has no voices; resolving
+    // false is better than waiting for an utterance that never ends.
+    if (isNativeApp()) {
+      finish(false)
+      return
+    }
 
     const synth = window.speechSynthesis
     if (!synth || typeof SpeechSynthesisUtterance === 'undefined') {

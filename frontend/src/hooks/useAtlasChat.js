@@ -34,7 +34,7 @@ export default function useAtlasChat({ onStateChange } = {}) {
   )
 
   const beginSpeaking = useCallback(
-    text => {
+    (text, language = 'auto') => {
       const cycle = ++cycleRef.current
       clearTimers()
 
@@ -50,9 +50,9 @@ export default function useAtlasChat({ onStateChange } = {}) {
         onStateChange?.('idle')
       }
 
-      // The phone has the speaker, the cloud server does not: the WebView asks
-      // for an Edge TTS MP3 and ends the "speaking" state when playback stops.
-      const playback = speakReply(text)
+      // The browser/phone has the speaker, the cloud server does not: the
+      // client asks for an Edge TTS MP3 and ends "speaking" when audio stops.
+      const playback = speakReply(text, language)
       if (playback) {
         hardRef.current = setTimeout(finish, 60000)
         playback.promise.then(finish).catch(finish)
@@ -106,7 +106,7 @@ export default function useAtlasChat({ onStateChange } = {}) {
           const reply = String(finalres.message || finalres.response)
           addMessage('assistant', reply)
           setProcessing(false)
-          beginSpeaking(reply)
+          beginSpeaking(reply, finalres.language || 'auto')
         } else {
           setProcessing(false)
           onStateChange?.('idle')
