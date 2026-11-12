@@ -1,6 +1,6 @@
 // ConversationPanel.jsx — Atlas conversation history and composer.
 import { useEffect, useRef, useState } from 'react'
-import { Download, MessagesSquare, Send, Trash2 } from 'lucide-react'
+import { Download, MessagesSquare, Send, Trash2, Volume2 } from 'lucide-react'
 import { Panel } from './ui'
 import { T } from './theme'
 
@@ -13,6 +13,7 @@ export default function ConversationPanel({
   messages,
   isProcessing,
   onSend,
+  onReplay,
   onClear,
   inputRef,
   isListening,
@@ -174,6 +175,18 @@ export default function ConversationPanel({
                 }}
               >
                 <span>{user ? userName : 'ATLAS'}</span>
+                {!user && (
+                  <button
+                    type="button"
+                    className="jv-ghost-btn"
+                    title="Play reply aloud"
+                    aria-label="Play reply aloud"
+                    onClick={() => onReplay?.(msg.text)}
+                    style={{ padding: '2px 5px', marginLeft: 'auto', lineHeight: 1 }}
+                  >
+                    <Volume2 size={10} />
+                  </button>
+                )}
               </div>
               <pre
                 style={{

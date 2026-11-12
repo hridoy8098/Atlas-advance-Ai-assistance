@@ -2,10 +2,10 @@
 import { useCallback, useEffect, useRef } from 'react'
 import useAtlasStore from '../store/useAtlasStore'
 import { sendCommand, getVoiceSpeaking } from '../services/api'
-import { speakReply, stopPlayback } from '../services/voice'
+import { speakReply, stopPlayback, unlockAudio } from '../services/voice'
 import { runNativeAction } from '../services/native'
 
-export default function useAtlasChat({ onStateChange } = {}) {
+export default function useAtlasChat({ onStateChange, onPlaybackFailed } = {}) {
   const messages = useAtlasStore(s => s.messages)
   const isProcessing = useAtlasStore(s => s.isProcessing)
   const addMessage = useAtlasStore(s => s.addMessage)
@@ -35,6 +35,9 @@ export default function useAtlasChat({ onStateChange } = {}) {
 
   const beginSpeaking = useCallback(
     (text, language = 'auto') => {
+      // A replay click is a user gesture; this also keeps the context warm for
+      // replies that arrive after the mic/send activation has expired.
+      unlockAudio()
       const cycle = ++cycleRef.current
       clearTimers()
 
@@ -55,7 +58,17 @@ export default function useAtlasChat({ onStateChange } = {}) {
       const playback = speakReply(text, language)
       if (playback) {
         hardRef.current = setTimeout(finish, 60000)
-        playback.promise.then(finish).catch(finish)
+        playback.promise
+          .then(ok => {
+            if (cycle !== cycleRef.current) return
+            finish()
+            if (!ok) onPlaybackFailed?.()
+          })
+          .catch(() => {
+            if (cycle !== cycleRef.current) return
+            finish()
+            onPlaybackFailed?.()
+          })
         return
       }
 
@@ -84,13 +97,16 @@ export default function useAtlasChat({ onStateChange } = {}) {
 
       tick()
     },
-    [clearTimers, onStateChange]
+    [clearTimers, onPlaybackFailed, onStateChange]
   )
 
   const send = useCallback(
     async raw => {
       const text = String(raw ?? '').trim()
       if (!text || processingRef.current) return
+
+      // Runs inside the send click/keypress, before the async AI request.
+      unlockAudio()
 
       processingRef.current = true
       addMessage('user', text)
@@ -122,6 +138,11 @@ export default function useAtlasChat({ onStateChange } = {}) {
     [addMessage, beginSpeaking, incrementCommandCount, onStateChange, setProcessing]
   )
 
+  const speak = useCallback(
+    (text, language = 'auto') => beginSpeaking(text, language),
+    [beginSpeaking]
+  )
+
   const clear = useCallback(() => {
     clearTimers()
     cycleRef.current += 1
@@ -130,5 +151,5 @@ export default function useAtlasChat({ onStateChange } = {}) {
     onStateChange?.('idle')
   }, [clearMessages, clearTimers, onStateChange])
 
-  return { messages, isProcessing, send, clear }
+  return { messages, isProcessing, send, speak, clear }
 }

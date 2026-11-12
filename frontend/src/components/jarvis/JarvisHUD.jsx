@@ -5,7 +5,7 @@ import useAtlasStore from '../../store/useAtlasStore'
 import { getHealth, getMetrics, getUserConfig, getWeather, stopSpeech } from '../../services/api'
 import useAtlasChat from '../../hooks/useAtlasChat'
 import useMicrophone from '../../hooks/useMicrophone'
-import { stopPlayback } from '../../services/voice'
+import { stopPlayback, unlockAudio } from '../../services/voice'
 import TopBar from './TopBar'
 import SystemStatsCard from './SystemStatsCard'
 import WeatherCard from './WeatherCard'
@@ -88,8 +88,11 @@ export default function JarvisHUD() {
   }, [])
 
   // Chat
-  const chat = useAtlasChat({ onStateChange: setChatState })
-  const { send: sendChat, messages, isProcessing } = chat
+  const chat = useAtlasChat({
+    onStateChange: setChatState,
+    onPlaybackFailed: () => toast.error('Voice play hoyni — reply-er speaker icon e tap koro.'),
+  })
+  const { send: sendChat, speak: replayReply, messages, isProcessing } = chat
 
   // Voice input: record on the phone, transcribe on the server.
   const mic = useMicrophone({
@@ -103,6 +106,8 @@ export default function JarvisHUD() {
       mic.stop()
       return
     }
+    // This tap unlocks delayed reply playback in strict browsers.
+    unlockAudio()
     if (chatState === 'speaking') {
       stopSpeech().catch(() => {})
       stopPlayback()
@@ -155,6 +160,7 @@ export default function JarvisHUD() {
             messages={messages}
             isProcessing={isProcessing}
             onSend={sendChat}
+            onReplay={replayReply}
             onClear={chat.clear}
             inputRef={inputRef}
             isListening={mic.listening}

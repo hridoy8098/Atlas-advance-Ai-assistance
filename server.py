@@ -858,13 +858,24 @@ def voice_tts(req: TTSRequest):
     temp_path = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False).name
     try:
         async def _save():
-            communicate = edge_tts.Communicate(
-                text=text,
-                voice=voice,
-                rate=config.TTS_SPEED,
-                pitch=config.TTS_PITCH,
-            )
-            await communicate.save(temp_path)
+            # Edge's endpoint occasionally drops a connection; one retry keeps
+            # a short reply from falling back to a robotic local voice.
+            last_error = None
+            for attempt in range(2):
+                try:
+                    communicate = edge_tts.Communicate(
+                        text=text,
+                        voice=voice,
+                        rate=config.TTS_SPEED,
+                        pitch=config.TTS_PITCH,
+                    )
+                    await communicate.save(temp_path)
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    if attempt == 0:
+                        await asyncio.sleep(0.35)
+            raise last_error
 
         asyncio.run(_save())
         with open(temp_path, "rb") as handle:

@@ -135,9 +135,28 @@ export const transcribeAudio = (blob, language = 'auto') => {
   return api.post('/voice/transcribe', form, { timeout: 90000 }).then(r => r.data)
 }
 
-// Edge TTS on the server, returned as MP3 so the phone can play it.
-export const fetchSpeech = (text, language = 'auto') =>
-  api.post('/voice/tts', { text, language }, { responseType: 'blob', timeout: 60000 })
+// Edge TTS on the server, returned as MP3 so the browser/phone can play it.
+// Edge occasionally drops a connection on the free tier; retry once before
+// falling back to the local browser voice.
+export const fetchSpeech = async (text, language = 'auto') => {
+  let lastError
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await api.post(
+        '/voice/tts',
+        { text, language },
+        { responseType: 'blob', timeout: 30000 },
+      )
+    } catch (error) {
+      lastError = error
+      const status = error?.response?.status
+      const retryable = !status || status === 408 || status === 429 || status >= 500
+      if (!retryable || attempt === 1) throw error
+      await new Promise(resolve => setTimeout(resolve, 400))
+    }
+  }
+  throw lastError
+}
 
 // ===== SYSTEM =====
 export const getMetrics = () => api.get('/system/metrics').then(r => r.data)
