@@ -641,7 +641,7 @@ def _latin_ratio(text: str) -> float:
 
 
 def _groq_transcribe(data: bytes, ext: str, content_type: str, key: str, language: str = "") -> dict:
-    """One Whisper request. Returns {success, text, detected, error}."""
+    """One Whisper request. Returns {success, text, detected, confidence, error}."""
     import requests
 
     payload = {
@@ -673,20 +673,41 @@ def _groq_transcribe(data: bytes, ext: str, content_type: str, key: str, languag
     except Exception:
         body = {}
 
+    # Whisper's own confidence for this language guess. `avg_logprob` is
+    # duration-weighted so one long segment does not dominate.
+    scores, weights = [], []
+    for segment in body.get("segments") or []:
+        try:
+            logprob = float(segment.get("avg_logprob"))
+            duration = float(segment.get("end", 0)) - float(segment.get("start", 0))
+        except (TypeError, ValueError):
+            continue
+        scores.append(logprob)
+        weights.append(duration if duration > 0 else 1.0)
+
+    confidence = None
+    if scores:
+        confidence = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
+
     return {
         "success": True,
         "text": str(body.get("text") or "").strip(),
         "detected": str(body.get("language") or "").strip(),
+        "confidence": confidence,
     }
 
 
 def _pick_auto_transcript(bn_result: dict, en_result: dict):
     """Choose between the Bengali and English passes.
 
-    Whisper's own auto-detect failed on Bengali test clips. Forcing both
-    languages and checking the script is deterministic: English speech comes
-    back as Latin under `en`, while Bengali under `en` comes back as Gujarati
-    (or another Indic script) and scores zero on the Latin ratio.
+    Whisper's auto-detect is unreliable on short clips, so the endpoint forces
+    both languages. Script checks are not enough: Bengali audio forced to `en`
+    can come back as a fluent English *translation* (Latin script), which looks
+    exactly like genuine English speech. Average log-probability is the honest
+    signal — on test clips the correct pass scored 0.4-0.9 higher:
+
+        Bengali audio: bn -0.10 vs en -0.50
+        English audio: en -0.08 vs bn -1.02
     """
     bn_text = (bn_result.get("text") or "").strip()
     en_text = (en_result.get("text") or "").strip()
@@ -698,9 +719,16 @@ def _pick_auto_transcript(bn_result: dict, en_result: dict):
     if not en_text:
         return bn_text, "bn"
 
-    if _latin_ratio(en_text) >= 0.55:
+    bn_conf = bn_result.get("confidence")
+    en_conf = en_result.get("confidence")
+    if bn_conf is not None and en_conf is not None:
+        print(f"🎙️ STT confidence: bn={bn_conf:.3f} en={en_conf:.3f}")
+        return (bn_text, "bn") if bn_conf > en_conf else (en_text, "en")
+
+    # Older providers without segments: fall back to script detection.
+    if _latin_ratio(en_text) >= 0.55 and _latin_ratio(bn_text) < 0.2:
         return en_text, "en"
-    if _letter_ratio(bn_text, "\u0980", "\u09ff") >= 0.45:
+    if _letter_ratio(bn_text, "\u0980", "\u09ff") >= 0.45 and _latin_ratio(en_text) < 0.2:
         return bn_text, "bn"
 
     # Mixed/noisy audio: the longer transcript is usually the real one.
@@ -843,6 +871,7 @@ async def health():
         "ai_primary": getattr(config, "AI_PRIMARY", "gemini"),
         "whisper_model": WHISPER_MODEL,
         "voice_duplex": True,
+        "stt_strategy": "dual-pass-confidence",
     }
 
 # ===== STARTUP =====
