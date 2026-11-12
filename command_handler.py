@@ -198,6 +198,26 @@ def is_agent_command(parsed: Dict) -> bool:
     return any(keyword in intent or keyword in command for keyword in agent_keywords)
 
 
+def _clean_location(value: Any) -> str:
+    """Normalize a weather slot that Whisper may have over-filled.
+
+    "What is the weather like today? I am speaking English." used to put the
+    whole tail into the location slot, which then got geocoded as a city.
+    """
+    location = str(value or "").strip(" ?.,!।")
+    location = re.split(r"[?।!]", location, maxsplit=1)[0].strip()
+    for prefix in ("in ", "at ", "of ", "for "):
+        if location.lower().startswith(prefix):
+            location = location[len(prefix):].strip(" ?.,!।")
+    location = re.sub(
+        r"\b(?:like|today|now|currently|outside|weather|speaking)\b",
+        " ",
+        location,
+        flags=re.IGNORECASE,
+    )
+    return " ".join(location.split()).strip(" ?.,!।")
+
+
 def handle_info_command(intent: str, command: str, entities: Dict[str, Any]) -> str:
     """Answer time/date/weather locally.
 
@@ -254,21 +274,7 @@ def handle_info_command(intent: str, command: str, entities: Dict[str, Any]) -> 
         return ""
 
     default_city = getattr(config, "DEFAULT_CITY", "Dhaka") or "Dhaka"
-    location = str(entities.get("location") or "").strip(" ?.,!।")
-    # Whisper often appends the rest of the sentence to the captured slot,
-    # e.g. "like today? I am speaking English." Keep the first clause only and
-    # drop filler words so they are not geocoded as a city.
-    location = re.split(r"[?।!]", location, maxsplit=1)[0].strip()
-    for prefix in ("in ", "at ", "of ", "for "):
-        if location.lower().startswith(prefix):
-            location = location[len(prefix):].strip(" ?.,!।")
-    location = re.sub(
-        r"\b(?:like|today|now|currently|outside|weather|speaking)\b",
-        " ",
-        location,
-        flags=re.IGNORECASE,
-    )
-    location = " ".join(location.split()).strip(" ?.,!।")
+    location = _clean_location(entities.get("location"))
 
     city_aliases = {
         "ঢাকা": "Dhaka", "ঢাকায়": "Dhaka", "ঢাকার": "Dhaka",
@@ -283,6 +289,10 @@ def handle_info_command(intent: str, command: str, entities: Dict[str, Any]) -> 
             break
     if location.lower() in ("", "today", "now", "এখন", "আজ", "আমার", "my"):
         location = ""
+    if location:
+        entities["location"] = location
+    else:
+        entities.pop("location", None)
 
     candidates = [location, default_city] if location and location.lower() != default_city.lower() else [default_city]
     for city in candidates:
