@@ -14,6 +14,7 @@ from backend.security.breach_detector import breach_detector
 from backend.security.malware_scanner import malware_scanner
 from backend.security.network_monitor import network_monitor
 from backend.security.password_manager import password_manager
+from .agent_i18n import tr
 from .advanced_common import (
     clean_text,
     data_file,
@@ -54,19 +55,35 @@ class SecuritySentinelAgent:
                 email = str(entities.get("email") or self._email(command) or "")
                 return self.breach_check(email)
             if "network" in intent_lower or "network" in lower:
-                return self.network_scan()
+                return self.network_scan(command)
             if "quarantine" in intent_lower or "quarantine" in lower:
                 target = entities.get("path") or find_existing_path(command)
-                return self.quarantine(target, bool(entities.get("confirm")))
+                return self.quarantine(target, bool(entities.get("confirm")), command)
             target = entities.get("path") or find_existing_path(command)
             if target:
-                return self.scan_files([str(target)])
-            return self.full_scan()
+                return self.scan_files([str(target)], command)
+            return self.full_scan(command=command)
         except Exception as exc:
             return fail("security_sentinel", f"Security Sentinel error: {exc}")
 
+    @staticmethod
+    def _is_cloud() -> bool:
+        return bool(getattr(config, "ATLAS_CLOUD", False))
+
+    def _cloud_hint(self, command: str = "") -> Dict[str, Any]:
+        return fail(
+            "security_sentinel",
+            tr(command,
+               "🛡️ File and network scanning runs on your laptop, not the cloud server. Start the laptop connector, then ask again.",
+               "🛡️ ফাইল ও নেটওয়ার্ক স্ক্যান আপনার ল্যাপটপে চলে, ক্লাউড সার্ভারে নয়। ল্যাপটপ connector চালু করে আবার বলুন।"),
+            needs_connector=True,
+        )
+
     # ---------------- actions ----------------
-    def full_scan(self, paths: Optional[List[str]] = None, max_files: int = 1500) -> Dict[str, Any]:
+    def full_scan(self, paths: Optional[List[str]] = None, max_files: int = 1500,
+                  command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         scan = malware_scanner.scan(paths=paths, max_files=max_files)
         network = network_monitor.summary()
         listening = int(network.get("listening", 0))
@@ -106,21 +123,29 @@ class SecuritySentinelAgent:
             **result,
         )
 
-    def scan_files(self, paths: List[str]) -> Dict[str, Any]:
+    def scan_files(self, paths: List[str], command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         scan = malware_scanner.scan(paths=paths, max_files=3000)
         suspicious = scan.get("suspicious", [])
         return ok(
             "security_sentinel",
-            f"🔍 {scan.get('files_scanned', 0)} file scanned; {len(suspicious)} suspicious.",
+            tr(command,
+               f"🔍 {scan.get('files_scanned', 0)} file scanned; {len(suspicious)} suspicious.",
+               f"🔍 {scan.get('files_scanned', 0)}টি ফাইল স্ক্যান; {len(suspicious)}টি সন্দেহজনক।"),
             **scan,
         )
 
-    def network_scan(self) -> Dict[str, Any]:
+    def network_scan(self, command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         summary = network_monitor.summary()
         connections = network_monitor.active_connections(limit=30)
         return ok(
             "security_sentinel",
-            f"🌐 {summary.get('established', 0)} established, {summary.get('listening', 0)} listening.",
+            tr(command,
+               f"🌐 {summary.get('established', 0)} established, {summary.get('listening', 0)} listening.",
+               f"🌐 {summary.get('established', 0)}টি established, {summary.get('listening', 0)}টি listening।"),
             network=summary,
             connections=connections,
             note="শুধু নিজের process-গুলো monitor করুন; unknown remote connection দেখলে যাচাই করুন।",
@@ -137,21 +162,24 @@ class SecuritySentinelAgent:
             f"⚠️ {email} found in {result.get('count', 0)} breach(es). Password বদলান।"
             if result.get("breached") else f"✅ No known breach for {email}."
         )
-        return ok("security_sentinel", message, **result, email=email)
+        payload = {key: value for key, value in result.items() if key not in ("message", "success", "agent")}
+        return ok("security_sentinel", message, **payload, email=email)
 
     def password_check(self, password: str) -> Dict[str, Any]:
         if not password:
             return fail("security_sentinel", "Password দিন (quote করে), যেমন: “password check ‘abc123’”।")
         result = password_manager.strength(password)
         score = result.get("score", 0)
-        entropy = result.get("entropy", 0)
+        entropy = result.get("entropy_bits", result.get("entropy", 0))
         message = f"🔐 Password strength: {score}/100 (entropy {entropy})."
         suggestions = result.get("suggestions") or []
         if suggestions:
             message += " " + " ".join(str(item) for item in suggestions[:2])
         return ok("security_sentinel", message, **result, password_masked="•" * min(len(password), 12))
 
-    def quarantine(self, target: Optional[Path], confirm: bool = False) -> Dict[str, Any]:
+    def quarantine(self, target: Optional[Path], confirm: bool = False, command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         if target is None or not target.exists() or not target.is_file():
             return fail("security_sentinel", "Quarantine করার file path দিন।")
         if not confirm:

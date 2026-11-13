@@ -36,7 +36,7 @@ class ImageGenerator:
         slug = re.sub(r"[^a-z0-9]+", "-", prompt.lower())[:40].strip("-") or "image"
         target = _MEDIA / f"{slug}_{int(time.time())}.png"
         target.write_bytes(resp.content)
-        return {"success": True, "path": str(target), "prompt": prompt, "size": f"{width}x{height}"}
+        return {"success": True, "path": str(target), "prompt": prompt, "size": f"{width}x{height}", "url": url}
 
     @staticmethod
     def _parse_size(size):

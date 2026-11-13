@@ -424,6 +424,45 @@ class PCAgent(BaseAgent):
         except Exception as e:
             return {"success": False, "message": f"❌ WiFi toggle failed: {str(e)}"}
 
+    def bluetooth_toggle(self, enable: bool = True) -> Dict:
+        """Try to toggle Bluetooth; Windows needs manual confirmation in Settings."""
+        try:
+            if self.is_linux:
+                result = subprocess.run(
+                    f"bluetoothctl power {'on' if enable else 'off'}",
+                    shell=True, capture_output=True, text=True,
+                )
+                if result.returncode == 0:
+                    return {"success": True,
+                            "message": f"🔵 Bluetooth {'enabled' if enable else 'disabled'}"}
+                return {"success": False,
+                        "message": f"❌ Bluetooth toggle failed: {result.stderr.strip() or 'bluetoothctl unavailable'}"}
+            if self.is_mac:
+                return {"success": False,
+                        "message": "🔵 macOS does not allow Bluetooth toggle from the terminal; use the menu bar."}
+            if self.is_windows:
+                try:
+                    import os
+                    os.startfile("ms-settings:bluetooth")  # type: ignore[attr-defined]
+                    opened = True
+                except Exception:
+                    opened = False
+                return {
+                    "success": False,
+                    "available": True,
+                    "settings_opened": opened,
+                    "message": (
+                        "🔵 Windows restricts automatic Bluetooth toggling. "
+                        "I opened Bluetooth Settings — switch it "
+                        f"{'on' if enable else 'off'} there."
+                        if opened else
+                        "🔵 Windows restricts automatic Bluetooth toggling; open Settings → Bluetooth."
+                    ),
+                }
+            return {"success": False, "message": "🔵 Bluetooth toggle is not supported on this OS."}
+        except Exception as e:
+            return {"success": False, "message": f"❌ Bluetooth toggle failed: {str(e)}"}
+
     def bluetooth_status(self) -> Dict:
         """Get Bluetooth status"""
         try:
@@ -566,20 +605,52 @@ class PCAgent(BaseAgent):
 
         # Network
         elif intent_lower in ["pc_wifi", "wifi"]:
+            if "enable" in entities:
+                return self.wifi_toggle(bool(entities.get("enable")))
             return self.wifi_status()
 
         elif intent_lower in ["pc_bluetooth", "bluetooth"]:
+            if "enable" in entities:
+                return self.bluetooth_toggle(bool(entities.get("enable")))
             return self.bluetooth_status()
 
         # Process management
         elif intent_lower in ["process_manager", "processes", "task_manager"]:
-            return self.process_manager()
+            action = str(entities.get("action") or "list")
+            name = str(entities.get("process_name") or entities.get("name") or "")
+            return self.process_manager(action, name)
 
         elif intent_lower in ["startup_apps", "startup"]:
             return self.startup_apps()
 
         # Default: system status
         return self.system_status()
+
+    # ========== SELF TEST ==========
+
+    def test(self) -> Dict:
+        """Read-only self test: no shutdown, no cleanup, no lock."""
+        checks = {}
+        try:
+            stats = self._get_system_stats()
+            checks["cpu"] = bool(stats.get("cpu"))
+            checks["ram"] = bool(stats.get("ram"))
+            checks["disk"] = bool(stats.get("disk"))
+        except Exception:
+            checks["cpu"] = checks["ram"] = checks["disk"] = False
+        try:
+            battery = psutil.sensors_battery()
+            checks["battery"] = battery is not None
+        except Exception:
+            checks["battery"] = False
+        checks["platform"] = bool(self.system)
+        return {
+            "success": checks["cpu"] and checks["ram"] and checks["disk"],
+            "agent": "pc",
+            "message": f"System metrics readable on {self.system} (battery={'yes' if checks['battery'] else 'no'}).",
+            "checks": checks,
+            "system": self.system,
+        }
 
     # ========== HELPERS ==========
 

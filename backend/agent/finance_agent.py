@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import config
 from backend.analytics.spending_analytics import spending_analytics
+from .agent_i18n import tr
 from .advanced_common import (
     bn_to_en_digits,
     clean_text,
@@ -55,50 +56,61 @@ class FinanceAgent:
             if "set_budget" in intent_lower or "budget set" in lower or "বাজেট সেট" in command:
                 amount = float(entities.get("amount") or extract_amount(command) or 0)
                 category = str(entities.get("category") or self._category(command) or "other")
-                return self.set_budget(category, amount)
+                return self.set_budget(category, amount, command)
             if "budget" in intent_lower or "budget" in lower or "বাজেট" in command:
-                return self.budget_report()
+                return self.budget_report(command)
             if any(word in intent_lower for word in ("summary", "report", "anomaly")) or any(
                 word in lower for word in ("summary", "report", "anomaly", "hisab")
             ) or any(
                 word in command for word in ("কত খরচ", "খরচ কত", "রিপোর্ট", "হিসাব")
             ):
-                return self.summary(int(entities.get("days") or 30))
+                return self.summary(int(entities.get("days") or 30), command=command)
             return self.add_expense(
                 float(entities.get("amount") or extract_amount(command) or 0),
                 str(entities.get("category") or self._category(command) or "other"),
                 str(entities.get("note") or self._note(command) or ""),
+                command,
             )
         except Exception as exc:
             return fail("finance", f"Finance Agent error: {exc}")
 
     # ---------------- actions ----------------
-    def add_expense(self, amount: float, category: str = "other", note: str = "") -> Dict[str, Any]:
+    def add_expense(self, amount: float, category: str = "other", note: str = "",
+                    command: str = "") -> Dict[str, Any]:
         if not amount or amount <= 0:
             return fail("finance", "কত টাকা খরচ হয়েছে বলুন, যেমন: “expense 250 lunch”।")
 
         category = self._normalize_category(category)
         category = self._normalize_category(self._category(f"{category} {note}") or category)
         result = spending_analytics.add(amount, category, note or None)
-        summary = self.summary(days=30, include_list=False)
+        summary = self.summary(days=30, include_list=False, command=command)
         budget = self._budget_status(category, summary.get("by_category", []))
+        label = CATEGORY_LABELS.get(category, category)
 
-        message = f"💸 ৳{amount:,.0f} added under {CATEGORY_LABELS.get(category, category)}."
+        message = tr(command,
+                      f"💸 ৳{amount:,.0f} added under {label}.",
+                      f"💸 ৳{amount:,.0f} যোগ হয়েছে — {label} বিভাগে।")
         if budget.get("over"):
-            message += f" ⚠️ {category} budget exceeded by ৳{budget['over']:,.0f}."
+            message += tr(command,
+                          f" ⚠️ {label} budget exceeded by ৳{budget['over']:,.0f}.",
+                          f" ⚠️ {label} বাজেট ৳{budget['over']:,.0f} ছাড়িয়ে গেছে।")
         elif budget.get("remaining") is not None:
-            message += f" Budget remaining: ৳{budget['remaining']:,.0f}."
+            message += tr(command,
+                          f" Budget remaining: ৳{budget['remaining']:,.0f}.",
+                          f" বাকি বাজেট: ৳{budget['remaining']:,.0f}।")
 
         return ok(
             "finance",
             message,
+            action="finance_add",
             expense=result,
             category=category,
             budget=budget,
             month_total=summary.get("total"),
         )
 
-    def summary(self, days: int = 30, include_list: bool = True) -> Dict[str, Any]:
+    def summary(self, days: int = 30, include_list: bool = True,
+                command: str = "") -> Dict[str, Any]:
         days = max(1, min(int(days), 365))
         result = spending_analytics.summary(days=days)
         budgets = self._budgets()
@@ -136,14 +148,19 @@ class FinanceAgent:
             payload["recent"] = self._recent_expenses(days, limit=10)
 
         if not result.get("count"):
-            return ok("finance", "এই সময়ে কোনো expense নেই। “expense 250 lunch” দিয়ে যোগ করুন।", **payload)
+            return ok("finance", tr(command,
+                                     "No expenses in this period. Add one with “expense 250 lunch”.",
+                                     "এই সময়ে কোনো expense নেই। “expense 250 lunch” দিয়ে যোগ করুন।"), **payload)
         return ok(
             "finance",
-            f"💰 Last {days} days: ৳{result['total']:,.0f} across {result['count']} expense(s).",
+            tr(command,
+               f"💰 Last {days} days: ৳{result['total']:,.0f} across {result['count']} expense(s).",
+               f"💰 শেষ {days} দিনে ৳{result['total']:,.0f} খরচ, {result['count']}টি লেনদেন।"),
+            action="finance_summary",
             **payload,
         )
 
-    def set_budget(self, category: str, amount: float) -> Dict[str, Any]:
+    def set_budget(self, category: str, amount: float, command: str = "") -> Dict[str, Any]:
         if not amount or amount <= 0:
             return fail("finance", "Budget amount দিন, যেমন: “set budget food 5000”।")
         category = self._normalize_category(category)
@@ -154,13 +171,21 @@ class FinanceAgent:
             budgets.setdefault("categories", {})[category] = float(amount)
         budgets["updated_at"] = datetime.now().isoformat(timespec="seconds")
         write_json(BUDGET_FILE, budgets)
-        return ok("finance", f"🎯 {CATEGORY_LABELS.get(category, category)} budget: ৳{amount:,.0f}/month.", budgets=budgets)
+        label = CATEGORY_LABELS.get(category, category)
+        return ok("finance",
+                  tr(command,
+                     f"🎯 {label} budget: ৳{amount:,.0f}/month.",
+                     f"🎯 {label} বাজেট: ৳{amount:,.0f}/মাস।"),
+                  action="finance_budget", budgets=budgets)
 
-    def budget_report(self) -> Dict[str, Any]:
-        summary = self.summary(days=30, include_list=False)
+    def budget_report(self, command: str = "") -> Dict[str, Any]:
+        summary = self.summary(days=30, include_list=False, command=command)
         return ok(
             "finance",
-            f"🎯 {len(summary.get('budgets', []))} budget(s) configured.",
+            tr(command,
+               f"🎯 {len(summary.get('budgets', []))} budget(s) configured.",
+               f"🎯 {len(summary.get('budgets', []))}টি বাজেট সেট করা আছে।"),
+            action="finance_budget_report",
             budgets=summary.get("budgets", []),
             month_total=summary.get("total"),
         )

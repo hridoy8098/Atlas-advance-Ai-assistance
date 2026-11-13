@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import config
+from .agent_i18n import tr
 from .advanced_common import (
     ask,
+    bn_to_en_digits,
     clean_text,
     data_file,
     fail,
@@ -44,17 +46,25 @@ class MeetingAutopilotAgent:
         lower = command.lower()
 
         try:
-            if "list" in intent_lower or "upcoming" in lower or "meeting list" in lower:
-                return self.list_upcoming()
-            if "cancel" in intent_lower or "cancel" in lower:
+            is_list = (
+                "list" in intent_lower
+                or "upcoming" in lower
+                or "meeting list" in lower
+                or ("মিটিং" in command and any(word in command for word in ("লিস্ট", "দেখাও", "তালিকা")))
+            )
+            if is_list:
+                return self.list_upcoming(command)
+            if "cancel" in intent_lower or "cancel" in lower or "বাতিল" in command:
                 event_id = str(entities.get("id") or entities.get("event_id") or self._first_token(command))
-                return self.cancel(event_id)
+                return self.cancel(event_id, command)
 
-            title = str(entities.get("title") or entities.get("topic") or self._title(command) or "Meeting").strip()
+            title = str(entities.get("title") or entities.get("topic") or self._title(command) or "").strip()
+            if not title:
+                title = tr(command, "Meeting", "মিটিং")
             when_text = str(entities.get("when") or entities.get("time") or command)
             duration = int(entities.get("duration") or self._duration(command) or 30)
             attendees = entities.get("attendees") or self._attendees(command)
-            return self.schedule(title, when_text, duration, attendees)
+            return self.schedule(title, when_text, duration, attendees, command)
         except Exception as exc:
             return fail("meeting_autopilot", f"Meeting Agent error: {exc}")
 
@@ -65,8 +75,9 @@ class MeetingAutopilotAgent:
         when_text: str = "",
         duration: int = 30,
         attendees: Optional[List[Any]] = None,
+        command: str = "",
     ) -> Dict[str, Any]:
-        title = clean_text(title) or "Meeting"
+        title = clean_text(title) or tr(command, "Meeting", "মিটিং")
         duration = max(15, min(int(duration), 240))
         requested = self._parse_when(when_text)
         if requested is None:
@@ -74,7 +85,9 @@ class MeetingAutopilotAgent:
 
         state = read_json(STATE_FILE, {"events": []})
         events = state.get("events") or []
-        chosen, alternatives, conflict = self._find_free_slot(events, requested, duration)
+        outside_hours = not self._in_work_hours(requested, duration)
+        busy = not self._is_free(events, requested, duration)
+        chosen, alternatives, moved = self._find_free_slot(events, requested, duration)
 
         agenda = ask(
             f"Write a short meeting agenda (4-6 bullets) for: {title}. "
@@ -107,18 +120,27 @@ class MeetingAutopilotAgent:
         state["updated_at"] = datetime.now().isoformat(timespec="seconds")
         write_json(STATE_FILE, state)
 
-        message = f"📅 “{title}” scheduled for {chosen.strftime('%a, %d %b %Y · %I:%M %p')}."
-        if conflict:
-            message += " Requested time was busy; next free slot chosen."
+        message = tr(command,
+                      f"📅 “{title}” scheduled for {chosen.strftime('%a, %d %b %Y · %I:%M %p')}.",
+                      f"📅 “{title}” নির্ধারিত হয়েছে — {chosen.strftime('%d %b %Y, %I:%M %p')}।")
+        if moved and outside_hours:
+            message += tr(command,
+                          " Requested time is outside working hours (Mon–Sat, 9 AM–6 PM); next free slot chosen.",
+                          " চাওয়া সময় অফিস সময়ের বাইরে (সোম–শনি, সকাল ৯টা–সন্ধ্যা ৬টা); পরের খালি সময় বেছে নেওয়া হয়েছে।")
+        elif moved:
+            message += tr(command,
+                          " Requested time was busy; next free slot chosen.",
+                          " চাওয়া সময় ব্যস্ত ছিল; পরের খালি সময় বেছে নেওয়া হয়েছে।")
         return ok(
             "meeting_autopilot",
             message,
+            action="meeting_schedule",
             event=event,
             alternatives=[slot.isoformat(timespec="minutes") for slot in alternatives],
-            conflict=conflict,
+            conflict=moved,
         )
 
-    def list_upcoming(self) -> Dict[str, Any]:
+    def list_upcoming(self, command: str = "") -> Dict[str, Any]:
         state = read_json(STATE_FILE, {"events": []})
         now = datetime.now()
         upcoming = []
@@ -132,19 +154,33 @@ class MeetingAutopilotAgent:
             if start >= now:
                 upcoming.append(event)
         upcoming.sort(key=lambda item: item.get("start", ""))
-        return ok("meeting_autopilot", f"📅 {len(upcoming)} upcoming meeting(s).", events=upcoming[:20])
+        return ok(
+            "meeting_autopilot",
+            tr(command,
+               f"📅 {len(upcoming)} upcoming meeting(s).",
+               f"📅 {len(upcoming)}টি আসন্ন মিটিং আছে।"),
+            action="meeting_list",
+            events=upcoming[:20],
+        )
 
-    def cancel(self, event_id: str) -> Dict[str, Any]:
+    def cancel(self, event_id: str, command: str = "") -> Dict[str, Any]:
         if not event_id:
-            return fail("meeting_autopilot", "Cancel করার জন্য event id দিন।")
+            return fail("meeting_autopilot", tr(command, "Give me the event id to cancel.",
+                                                "বাতিল করার জন্য event id দিন।"))
         state = read_json(STATE_FILE, {"events": []})
         for event in state.get("events") or []:
             if event.get("id") == event_id:
                 event["status"] = "cancelled"
                 event["cancelled_at"] = datetime.now().isoformat(timespec="seconds")
                 write_json(STATE_FILE, state)
-                return ok("meeting_autopilot", f"🗑️ “{event.get('title')}” cancelled.", event=event)
-        return fail("meeting_autopilot", f"Meeting পাওয়া যায়নি: {event_id}")
+                return ok("meeting_autopilot",
+                          tr(command,
+                             f"🗑️ “{event.get('title')}” cancelled.",
+                             f"🗑️ “{event.get('title')}” বাতিল হয়েছে।"),
+                          action="meeting_cancel", event=event)
+        return fail("meeting_autopilot",
+                    tr(command, f"Meeting not found: {event_id}",
+                       f"মিটিং পাওয়া যায়নি: {event_id}"))
 
     # ---------------- slot logic ----------------
     def _find_free_slot(self, events: List[Dict[str, Any]], requested: datetime, duration: int):
@@ -204,7 +240,7 @@ class MeetingAutopilotAgent:
 
     # ---------------- parsing ----------------
     def _parse_when(self, text: str) -> Optional[datetime]:
-        text = clean_text(text).lower()
+        text = bn_to_en_digits(clean_text(text).lower())
         now = datetime.now()
         date_value: Optional[datetime] = None
 
@@ -250,6 +286,18 @@ class MeetingAutopilotAgent:
         match = re.search(r"\b(\d{1,2}):(\d{2})\b", text)
         if match:
             return int(match.group(1)), int(match.group(2))
+        bn_match = re.search(
+            r"(?:সকাল|দুপুর|বিকাল|সন্ধ্যা|রাত)\s*(\d{1,2})(?!\d)|(\d{1,2})\s*(?:টা|টায়|টার)",
+            text,
+        )
+        if bn_match:
+            hour = int(bn_match.group(1) or bn_match.group(2))
+            window = text[max(0, bn_match.start() - 8): bn_match.end() + 4]
+            if any(word in window for word in ("বিকাল", "সন্ধ্যা", "রাত")) and hour < 12:
+                hour += 12
+            elif "দুপুর" in window and 1 <= hour < 6:
+                hour += 12
+            return hour % 24, 0
         match = re.search(r"\b(?:at|সকাল|দুপুর|বিকাল|রাত)\s*(\d{1,2})\b", text)
         if match:
             return int(match.group(1)), 0

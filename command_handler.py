@@ -9,6 +9,7 @@ from typing import Dict, Any
 
 import config
 from backend.agent.agent_orchestrator import agent_orchestrator
+from backend.agent.smart_planner import plan_command
 from backend.core.weather import get_weather as fetch_weather
 from backend.core.ai_engine import ai_engine
 from backend.core.memory import memory_manager
@@ -33,6 +34,10 @@ def handle_agent_command(command: str, parsed: Dict, return_result: bool = False
     # Orchestrator এ পাঠানো
     result = agent_orchestrator.execute(intent, entities, original_command)
     agent_result: Dict[str, Any] = result if isinstance(result, dict) else {}
+
+    # The planner decided this is ordinary conversation, not an action.
+    if result.get("handled") is False or result.get("action") in ("chat", "chat_fallback"):
+        return (handle_ai_fallback(command), {}) if return_result else handle_ai_fallback(command)
 
     if result.get("success", False):
         message = result.get("message", "Command executed successfully.")
@@ -101,101 +106,27 @@ def handle_ai_fallback(command: str) -> str:
 
 
 def is_agent_command(parsed: Dict) -> bool:
-    """চেক করে এটা Agent এর কমান্ড কিনা"""
-    if not parsed or 'intent' not in parsed:
+    """Return True only for concrete actions the planner recognizes.
+
+    Ordinary questions ("how do I open a bank account", "tell me about
+    black holes") are intentionally not agent commands; they go to AI chat.
+    """
+    if not parsed:
         return False
 
-    intent = parsed.get('intent', '').lower()
-    command = parsed.get('original_command', '').lower() if 'original_command' in parsed else ""
+    command = str(parsed.get("original_command") or "").strip()
+    if command:
+        try:
+            return plan_command(command) is not None
+        except Exception:
+            pass
 
-    # All agent intents
-    agent_intents = [
-        # Call agents
-        "whatsapp_call", "whatsapp_voice_call", "call_whatsapp",
-        "call_contact_on_whatsapp", "call_receptionist", "receptionist_status",
-        "busy_mode_on", "busy_mode_off", "simulate_call", "list_calls", "callback",
-        # App
-        "open_app", "app_open",
-        # PC
-        "pc_optimize", "pc_clean", "pc_shutdown", "pc_restart", "pc_lock", 
-        "pc_sleep", "pc_battery", "pc_status", "pc_wifi", "pc_bluetooth",
-        "process_manager", "startup_apps",
-        # File
-        "file_organize", "file_search", "file_create", "file_delete",
-        "file_copy", "file_move", "file_rename", "file_backup",
-        # Web
-        "web_search", "web_research", "web_summarize", "web_translate",
-        "web_bookmark", "web_history", "open_url", "open_website",
-        # Media
-        "media_youtube", "media_music", "media_video", "media_image",
-        "media_meme", "media_download", "media_subtitle", "media_convert",
-        "youtube", "play_youtube", "play_music", "generate_image", "generate_meme",
-        # Productivity
-        "productivity_task", "productivity_show_tasks", "productivity_pomodoro",
-        "productivity_reminder", "productivity_calendar", "productivity_note",
-        "productivity_alarm", "add_task", "new_task", "show_tasks", "pomodoro",
-        "focus_mode", "task", "todo", "reminder",
-        # Security
-        "security_lock", "security_privacy", "security_breach", "security_password",
-        "security_scan", "security_firewall", "privacy_mode", "enable_privacy",
-        "check_breach",
-        # Terminal
-        "terminal_run", "terminal_git", "terminal_pip", "terminal_npm",
-        "git_status", "git_pull", "git_push", "git_commit",
-        "pip_install", "npm_install",
-        # Advanced agents (Atlas 7.0)
-        "coding_review", "coding_scan", "coding_explain", "coding_fix", "coding_test",
-        "screen_capture", "screen_analyze", "screen_click", "screen_type", "screen_hotkey",
-        "deep_research", "research_report", "cite_sources",
-        "doc_ingest", "doc_ask", "doc_list",
-        "exam_plan", "exam_quiz", "exam_flashcards", "exam_weak_topics",
-        "yt_learn", "yt_summarize", "yt_transcript",
-        "presentation_build", "report_build",
-        "email_triage", "email_inbox", "email_draft",
-        "meeting_schedule", "meeting_list", "meeting_cancel",
-        "finance_add", "finance_summary", "finance_budget",
-        "malware_scan", "network_scan", "breach_check",
-        "privacy_audit", "clipboard_check", "blur_faces",
-    ]
-
-    # Check if intent is an agent intent
-    if intent in agent_intents:
-        return True
-
-    # Let the orchestrator's own keyword router decide for the advanced
-    # agents, so this gate stays in sync automatically.
+    # Structured callers without a natural command (phone bridge, tests).
+    intent = str(parsed.get("intent") or "").lower()
     try:
-        if agent_orchestrator._advanced_route(command):
-            return True
+        return intent in agent_orchestrator._intent_map()
     except Exception:
-        pass
-
-    # Fallback: check keywords in command
-    agent_keywords = [
-        "open", "youtube", "chrome", "vscode", "gmail", "github",
-        "facebook", "whatsapp", "chatgpt", "spotify", "discord",
-        "optimize", "clean", "boost", "speed", "tune",
-        "shutdown", "restart", "lock", "sleep", "system status",
-        "battery", "wifi", "bluetooth", "process", "startup",
-        "organize", "downloads", "file", "folder", "search file",
-        "research", "search google", "search web", "google",
-        "summarize", "translate", "bookmark",
-        "video", "music", "image", "meme", "download",
-        "pomodoro", "task", "reminder", "calendar", "note", "alarm",
-        "privacy", "breach", "password", "scan", "firewall",
-        "terminal", "git", "pip", "npm", "run command",
-        "weather", "time", "date", "news",
-        "receptionist", "busy mode", "call inbox", "callback",
-        "simulate call", "test call", "call summary", "call list",
-        "রিসেপশনিস্ট", "বিজি মোড", "কল ধর", "কল ইনবক্স",
-        "খোল", "চালু", "ফাস্ট", "পরিষ্কার", "শাটডাউন",
-        "বন্ধ", "রিস্টার্ট", "লক", "ব্যাটারি", "ওয়াইফাই",
-        "গোছাও", "ফাইল", "খুঁজ", "গান", "ভিডিও", "ছবি",
-        "টাস্ক", "কাজ", "পোমোডোরো", "রিমাইন্ডার", "নোট",
-        "প্রাইভেসি", "নিরাপত্তা", "টার্মিনাল", "আবহাওয়া", "সময়"
-    ]
-
-    return any(keyword in intent or keyword in command for keyword in agent_keywords)
+        return False
 
 
 def _clean_location(value: Any) -> str:
@@ -380,7 +311,7 @@ def get_command_response(command: str, platform: str = "desktop") -> dict:
         for key in (
             "action", "agent", "phone", "contact", "deep_link",
             "requires_bridge", "requires_manual_tap", "candidates", "call",
-            "query", "hint",
+            "query", "hint", "needs_connector", "connector_command",
         ):
             if key in agent_result:
                 result[key] = agent_result[key]

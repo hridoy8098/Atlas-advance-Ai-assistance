@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import {
   Bot, Search, X, Smartphone, Laptop, Cloud, Globe2, ChevronDown, ChevronUp,
   Loader2, Play, RefreshCw, PhoneCall, PhoneOutgoing, ShieldAlert, Plus, Trash2, Radio,
+  Copy, Check,
 } from 'lucide-react'
 import useAtlasStore from '../../store/useAtlasStore'
 import { T } from './theme'
@@ -177,10 +178,11 @@ const miniButton = {
   fontSize: 10, whiteSpace: 'nowrap',
 }
 
-function AgentCard({ agent, onToggle, busy, expanded, onExpand, onTest, onRefresh }) {
+function AgentCard({ agent, onToggle, busy, expanded, onExpand, onTest, onRefresh, connector }) {
   const risk = RISK[agent.risk] || RISK.safe
   const health = HEALTH[agent.health?.status] || HEALTH.disabled
   const isCallAgent = agent.id === 'whatsapp_call' || agent.id === 'call_receptionist'
+  const needsLaptop = agent.execution === 'pc' && connector?.relay_enabled && !connector?.connected
 
   return (
     <div style={{
@@ -221,6 +223,7 @@ function AgentCard({ agent, onToggle, busy, expanded, onExpand, onTest, onRefres
         })}
         <Badge color={risk.color}>{risk.label}</Badge>
         <Badge color={health.color}>{health.label}</Badge>
+        {needsLaptop && <Badge color={T.amber}><Laptop size={9} /> Laptop off</Badge>}
       </div>
 
       <div style={{ marginTop: 6, paddingLeft: 38, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -237,6 +240,11 @@ function AgentCard({ agent, onToggle, busy, expanded, onExpand, onTest, onRefres
           {agent.health?.note && (
             <div style={{ fontSize: 9.5, color: agent.health.status === 'ready' ? '#86efac' : T.amber, marginBottom: 7, lineHeight: 1.4 }}>
               {agent.health.note}
+            </div>
+          )}
+          {needsLaptop && (
+            <div style={{ fontSize: 9.5, color: T.amber, marginBottom: 7, lineHeight: 1.4 }}>
+              This agent runs on your laptop. Start the laptop connector so cloud commands can reach it.
             </div>
           )}
           {(agent.health?.missing || []).length > 0 && (
@@ -391,7 +399,9 @@ export default function AgentPanel({ open, onClose }) {
   const [expanded, setExpanded] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
   const [connector, setConnector] = useState(null)
+  const [copied, setCopied] = useState(false)
   const ref = useRef(null)
+  const connectorCommand = 'python connector/atlas_laptop.py --server https://atlas-7-api.onrender.com --token <pair-code>'
 
   const load = useCallback(async () => {
     setAgentsLoading(true)
@@ -489,6 +499,17 @@ export default function AgentPanel({ open, onClose }) {
     }
   }
 
+  const copyConnector = async () => {
+    try {
+      await navigator.clipboard.writeText(connectorCommand)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+      toast.success('Connector command copied')
+    } catch {
+      toast.error('Could not copy; select the command manually')
+    }
+  }
+
   return (
     <div
       ref={ref}
@@ -580,26 +601,44 @@ export default function AgentPanel({ open, onClose }) {
               onExpand={id => setExpanded(prev => prev === id ? '' : id)}
               onTest={handleTest}
               onRefresh={load}
+              connector={connector}
             />
           ))
         )}
       </div>
 
       {/* Footer */}
-      <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.borderSoft}`, display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
-        <span style={{ fontSize: 9.5, color: T.dim, flex: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span style={{
-            width: 5, height: 5, borderRadius: '50%',
-            background: connector?.connected ? T.green : T.dim,
-            boxShadow: connector?.connected ? `0 0 6px ${T.green}` : 'none',
-          }} />
-          {connector?.connected
-            ? `Laptop relay: ${connector.name || 'connected'}`
-            : 'Laptop relay: offline'}
-        </span>
-        <button type="button" onClick={load} disabled={agentsLoading} style={{ ...miniButton, padding: '4px 7px' }}>
-          <RefreshCw size={11} className={agentsLoading ? 'jv-spin' : ''} /> Refresh
-        </button>
+      <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.borderSoft}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ fontSize: 9.5, color: T.dim, flex: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{
+              width: 5, height: 5, borderRadius: '50%',
+              background: connector?.connected ? T.green : T.dim,
+              boxShadow: connector?.connected ? `0 0 6px ${T.green}` : 'none',
+            }} />
+            {connector?.connected
+              ? `Laptop relay: ${connector.name || 'connected'}`
+              : 'Laptop relay: offline'}
+          </span>
+          <button type="button" onClick={load} disabled={agentsLoading} style={{ ...miniButton, padding: '4px 7px' }}>
+            <RefreshCw size={11} className={agentsLoading ? 'jv-spin' : ''} /> Refresh
+          </button>
+        </div>
+        {connector?.relay_enabled && !connector?.connected && (
+          <div style={{ marginTop: 7, padding: '6px 8px', borderRadius: 7, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.22)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ flex: 1, fontSize: 9.2, color: T.amber, lineHeight: 1.4 }}>
+                PC, file, terminal, app and media commands need the laptop connector. Run this on your PC:
+              </div>
+              <button type="button" onClick={copyConnector} style={{ ...miniButton, padding: '3px 6px', color: copied ? T.green : T.accent }} title="Copy connector command">
+                {copied ? <Check size={11} /> : <Copy size={11} />}
+              </button>
+            </div>
+            <code style={{ display: 'block', marginTop: 4, fontSize: 8.6, color: T.text, fontFamily: T.mono, whiteSpace: 'nowrap', overflowX: 'auto' }}>
+              {connectorCommand}
+            </code>
+          </div>
+        )}
       </div>
     </div>
   )

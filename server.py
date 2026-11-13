@@ -364,6 +364,8 @@ async def take_command(req: CommandRequest):
             "call": result.get("call"),
             "query": result.get("query"),
             "hint": result.get("hint"),
+            "needs_connector": result.get("needs_connector", False),
+            "connector_command": result.get("connector_command"),
             "relayed": relayed is not None,
             "agent_result": result.get("agent_result"),
         }

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import config
 from backend.security.privacy_mode import privacy_mode
 from backend.security.screen_watermark import screen_watermark
+from .agent_i18n import tr
 from .advanced_common import (
     clean_text,
     data_file,
@@ -51,8 +52,8 @@ class PrivacyGuardianAgent:
         try:
             if "clipboard" in intent_lower or "clipboard" in lower:
                 if "clear" in lower or "clear" in intent_lower:
-                    return self.clipboard_clear()
-                return self.clipboard_check()
+                    return self.clipboard_clear(command)
+                return self.clipboard_check(command)
             if "blur" in intent_lower or "blur" in lower or "redact" in lower:
                 image = entities.get("image") or entities.get("path") or find_existing_path(command)
                 return self.blur_image(image)
@@ -60,34 +61,55 @@ class PrivacyGuardianAgent:
                 image = entities.get("image") or entities.get("path") or find_existing_path(command)
                 return self.watermark_image(image, str(entities.get("text") or "ATLAS"))
             if any(word in lower for word in ("off", "disable", "বন্ধ")):
-                return self.set_mode(False)
+                return self.set_mode(False, command)
             if any(word in lower for word in ("on", "enable", "চালু")) and "audit" not in lower:
-                return self.set_mode(True)
-            if "mode" in intent_lower or "privacy status" in lower:
-                return self.status()
+                return self.set_mode(True, command)
+            if "mode" in intent_lower or "privacy status" in lower or "স্ট্যাটাস" in lower:
+                return self.status(command)
             target = entities.get("path") or find_existing_path(command)
-            return self.audit(target)
+            return self.audit(target, command)
         except Exception as exc:
             return fail("privacy_guardian", f"Privacy Guardian error: {exc}")
 
+    @staticmethod
+    def _is_cloud() -> bool:
+        return bool(getattr(config, "ATLAS_CLOUD", False))
+
+    def _cloud_hint(self, command: str) -> Dict[str, Any]:
+        return fail(
+            "privacy_guardian",
+            tr(command,
+               "🔐 Privacy audit and clipboard checks run on your laptop. Start the laptop connector, then ask again.",
+               "🔐 প্রাইভেসি অডিট ও ক্লিপবোর্ড চেক আপনার ল্যাপটপে চলে। ল্যাপটপ connector চালু করে আবার বলুন।"),
+            needs_connector=True,
+        )
+
     # ---------------- actions ----------------
-    def set_mode(self, enabled: bool) -> Dict[str, Any]:
+    def set_mode(self, enabled: bool, command: str = "") -> Dict[str, Any]:
         result = privacy_mode.enable() if enabled else privacy_mode.disable()
         return ok(
             "privacy_guardian",
-            "🔒 Privacy mode ON." if enabled else "🔓 Privacy mode OFF.",
+            tr(command, "🔒 Privacy mode ON." if enabled else "🔓 Privacy mode OFF.",
+               "🔒 প্রাইভেসি মোড চালু।" if enabled else "🔓 প্রাইভেসি মোড বন্ধ।"),
+            action="privacy_mode",
             **result,
         )
 
-    def status(self) -> Dict[str, Any]:
+    def status(self, command: str = "") -> Dict[str, Any]:
         status = privacy_mode.status()
+        enabled = status.get("enabled")
         return ok(
             "privacy_guardian",
-            "🔒 Privacy mode is ON." if status.get("enabled") else "🔓 Privacy mode is OFF.",
+            tr(command,
+               "🔒 Privacy mode is ON." if enabled else "🔓 Privacy mode is OFF.",
+               "🔒 প্রাইভেসি মোড চালু আছে।" if enabled else "🔓 প্রাইভেসি মোড বন্ধ আছে।"),
+            action="privacy_status",
             **status,
         )
 
-    def audit(self, target: Optional[Path] = None) -> Dict[str, Any]:
+    def audit(self, target: Optional[Path] = None, command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         roots = []
         if target and target.exists():
             roots = [target]
@@ -153,11 +175,16 @@ class PrivacyGuardianAgent:
 
         return ok(
             "privacy_guardian",
-            f"🕵️ Privacy audit: {len(files)} file scanned, {sum(counts.values())} sensitive item(s).",
+            tr(command,
+               f"🕵️ Privacy audit: {len(files)} file scanned, {sum(counts.values())} sensitive item(s).",
+               f"🕵️ প্রাইভেসি অডিট: {len(files)}টি ফাইল স্ক্যান, {sum(counts.values())}টি সংবেদনশীল আইটেম পাওয়া গেছে।"),
+            action="privacy_audit",
             **result,
         )
 
-    def clipboard_check(self) -> Dict[str, Any]:
+    def clipboard_check(self, command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         try:
             import pyperclip
             text = pyperclip.paste() or ""
@@ -170,17 +197,26 @@ class PrivacyGuardianAgent:
                 found.append(kind)
         return ok(
             "privacy_guardian",
-            ("⚠️ Clipboard-এ sensitive data আছে: " + ", ".join(found)) if found else "✅ Clipboard-এ sensitive pattern নেই।",
+            tr(command,
+               ("⚠️ Clipboard has sensitive data: " + ", ".join(found)) if found
+               else "✅ No sensitive pattern in the clipboard.",
+               ("⚠️ Clipboard-এ sensitive data আছে: " + ", ".join(found)) if found
+               else "✅ Clipboard-এ sensitive pattern নেই।"),
+            action="clipboard_check",
             length=len(text),
             findings=found,
             preview=truncate(text, 120) if not found else "",
         )
 
-    def clipboard_clear(self) -> Dict[str, Any]:
+    def clipboard_clear(self, command: str = "") -> Dict[str, Any]:
+        if self._is_cloud():
+            return self._cloud_hint(command)
         try:
             import pyperclip
             pyperclip.copy("")
-            return ok("privacy_guardian", "🧹 Clipboard cleared.")
+            return ok("privacy_guardian",
+                      tr(command, "🧹 Clipboard cleared.", "🧹 Clipboard পরিষ্কার করা হয়েছে।"),
+                      action="clipboard_clear")
         except Exception as exc:
             return fail("privacy_guardian", f"Clipboard clear failed: {exc}")
 
