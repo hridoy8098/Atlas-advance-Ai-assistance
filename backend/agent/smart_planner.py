@@ -144,6 +144,18 @@ _SEQUENCE_SPLIT_RE = re.compile(
 
 _QUOTED_RE = re.compile(r'"[^"]*"|\'[^\']*\'|“[^”]*”')
 
+# When a query phrase contains a connector word ("search rock and roll"),
+# split_steps produces a harmless fragment ("roll"). Merge that fragment back
+# into the preceding search step instead of losing the whole compound command.
+_MERGEABLE_SEARCH_INTENTS = {
+    "media_youtube",
+    "web_search",
+    "web_research",
+    "wikipedia_search",
+    "web_news",
+    "deep_research",
+}
+
 
 def _protect_quotes(text: str) -> tuple:
     kept = []
@@ -1080,6 +1092,16 @@ def plan_sequence(command: str) -> list:
     plans = []
     for segment in segments:
         plan = plan_command(segment, context=context)
+        if plan is None and plans and plans[-1].intent in _MERGEABLE_SEARCH_INTENTS:
+            previous = plans[-1]
+            previous_segment = str(previous.entities.get("_step_command") or "")
+            merged_segment = f"{previous_segment} and {segment}".strip()
+            merged_plan = plan_command(merged_segment, context=context)
+            if merged_plan is not None:
+                merged_plan.entities["_step_command"] = merged_segment
+                plans[-1] = merged_plan
+                _advance_context(context, merged_plan)
+                continue
         if plan is None:
             single = plan_command(original)
             return [single] if single else []

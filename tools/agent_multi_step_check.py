@@ -8,6 +8,7 @@ It checks:
   3. real sequential execution with browser launches stubbed out,
   4. each agent's own self-test / health result.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -90,6 +91,8 @@ SEQUENCES = [
     ),
     ("open youtube and play music", [("app", "open_app"), ("media", "media_youtube_play")], "music"),
     ("open youtube and search lofi beats", [("app", "open_app"), ("media", "media_youtube")], "lofi beats"),
+    ("open youtube and search rock and roll", [("app", "open_app"), ("media", "media_youtube")], "rock and roll"),
+    ("play rock and roll", [("media", "media_youtube_play")], "rock and roll"),
     ("check email then list meetings then battery status", [("email_triage", "email_triage"), ("meeting_autopilot", "meeting_list"), ("pc", "pc_battery")], ""),
 ]
 
@@ -166,6 +169,13 @@ try:
             f"execute: {command!r}",
             f"steps={len(steps)} success={result.get('success')} "
             f"agents={[s.get('agent') for s in steps]}",
+        )
+        message = str(result.get("message") or "")
+        duplicate_icons = re.search(r"(?:✅|⚠️)\s+\d+\.\s+(?:✅|⚠️)", message)
+        report(
+            not duplicate_icons,
+            f"format: {command!r}",
+            "double status icon" if duplicate_icons else "",
         )
         for step in steps:
             if not step.get("success"):
