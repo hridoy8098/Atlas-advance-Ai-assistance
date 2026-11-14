@@ -641,6 +641,34 @@ def _groq_audio_keys() -> list:
 # more accurate and is still under a second for the short clips the app sends.
 WHISPER_MODEL = (os.getenv("GROQ_WHISPER_MODEL") or "whisper-large-v3").strip()
 
+# Whisper treats a prompt as vocabulary/context, not as an instruction to
+# translate. A short bilingual prompt fixes two real failures seen with the
+# raw command set:
+#   * Bengali commands were decoded with missing letters
+#     ("আজকের আবহাওয়া" -> "আছকের আবহা५ा")
+#   * English speech decoded by the Bengali pass became Bengali
+#     transliteration ("battery status" -> "পাটারি স্টাতিস")
+# Keep this list short: a longer prompt measurably degraded Bengali decoding
+# (verified against the same clip), while this version keeps both languages
+# exact. Must stay under Whisper's 224-token prompt limit.
+STT_PROMPT = (
+    "Atlas voice commands. বাংলা: আজকের আবহাওয়া, ইউটিউব খোলো, গান চালাও, "
+    "ফাইল খুঁজো, ব্যাটারি স্ট্যাটাস, মিটিং লিস্ট, প্রাইভেসি স্ট্যাটাস। "
+    "English: battery status, open youtube, play music, find file, meeting list."
+)
+
+_STT_LANGUAGE_CODES = {
+    "bengali": "bn", "bangla": "bn", "english": "en", "hindi": "hi",
+    "urdu": "ur", "arabic": "ar", "spanish": "es", "french": "fr",
+    "german": "de", "russian": "ru", "chinese": "zh", "japanese": "ja",
+    "korean": "ko",
+}
+
+
+def _stt_language_code(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    return _STT_LANGUAGE_CODES.get(raw, raw[:2] if len(raw) >= 2 else raw)
+
 
 def _letter_ratio(text: str, first: str, last: str) -> float:
     letters = [ch for ch in text if ch.isalpha()]
@@ -656,7 +684,8 @@ def _latin_ratio(text: str) -> float:
     return sum(1 for ch in letters if ch.isascii()) / len(letters)
 
 
-def _groq_transcribe(data: bytes, ext: str, content_type: str, keys: list, language: str = "") -> dict:
+def _groq_transcribe(data: bytes, ext: str, content_type: str, keys: list,
+                     language: str = "", prompt: str = STT_PROMPT) -> dict:
     """One Whisper request, rotating keys on rate limits/auth errors.
 
     Returns {success, text, detected, confidence, error}.
@@ -670,6 +699,8 @@ def _groq_transcribe(data: bytes, ext: str, content_type: str, keys: list, langu
     }
     if language:
         payload["language"] = language
+    if prompt:
+        payload["prompt"] = prompt
 
     last_error = {"success": False, "error": "Transcription failed"}
     for key in keys[:3]:
@@ -766,6 +797,30 @@ def _pick_auto_transcript(bn_result: dict, en_result: dict):
     return (en_text, "en") if len(en_text) >= len(bn_text) else (bn_text, "bn")
 
 
+def _stt_needs_review(text: str, language: str, confidence) -> bool:
+    """Low-confidence or garbled clips should not run commands."""
+    text = (text or "").strip()
+    if len(text) < 2:
+        return True
+    if language not in {"bn", "en"}:
+        return True
+    if confidence is not None:
+        try:
+            if float(confidence) < -1.0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    # Whisper occasionally mixes Devanagari glyphs into Bengali output
+    # ("আবহা५ा"), which is never a real Bengali command. Treat it as doubtful.
+    if _letter_ratio(text, "\u0900", "\u097f") > 0:
+        return True
+    # A Bengali-labelled result with no Bengali letters at all is usually a
+    # language mix-up, so show it to the user before executing anything.
+    if language == "bn" and _letter_ratio(text, "\u0980", "\u09ff") == 0:
+        return True
+    return False
+
+
 @app.post("/api/voice/transcribe")
 async def voice_transcribe(file: UploadFile = File(...), language: str = Form("")):
     """Transcribe a clip recorded by the phone or browser (Groq Whisper)."""
@@ -797,17 +852,43 @@ async def voice_transcribe(file: UploadFile = File(...), language: str = Form(""
     }.get(content_type, "webm")
 
     def _transcribe():
-        if lang:
+        # Explicit non-Bengali/English languages are rare; honour them.
+        if lang and lang not in {"bn", "en"}:
             result = _groq_transcribe(data, ext, content_type, keys, lang)
             if not result.get("success"):
                 return result
             text = result.get("text") or ""
             if not text:
                 return {"success": False, "error": "No speech detected"}
-            return {"success": True, "text": text, "language": lang}
+            return {
+                "success": True,
+                "text": text,
+                "language": lang,
+                "confidence": result.get("confidence"),
+                "needs_review": False,
+            }
 
-        # Auto mode: both passes run concurrently, so this costs roughly one
-        # request of latency while removing the wrong-language failures.
+        # Let Whisper identify the language instead of forcing both passes and
+        # comparing their log-probabilities. Forced Bengali on English audio
+        # returned confident Bengali transliteration ("পাটারি স্টাতিস"), which
+        # won the old confidence comparison and became the wrong command.
+        detected_result = _groq_transcribe(data, ext, content_type, keys, "")
+        if detected_result.get("success"):
+            text = (detected_result.get("text") or "").strip()
+            detected = _stt_language_code(detected_result.get("detected"))
+            if text and detected in {"bn", "en"}:
+                confidence = detected_result.get("confidence")
+                return {
+                    "success": True,
+                    "text": text,
+                    "language": detected,
+                    "confidence": confidence,
+                    "needs_review": _stt_needs_review(text, detected, confidence),
+                }
+
+        # Auto-detect was unusable (unsupported language, empty text, or a
+        # provider error). Fall back to the bilingual pair, still with the
+        # domain prompt, and prefer an explicitly requested language.
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -819,11 +900,33 @@ async def voice_transcribe(file: UploadFile = File(...), language: str = Form(""
         if not bn_result.get("success") and not en_result.get("success"):
             return bn_result if bn_result.get("error") else en_result
 
+        if lang in {"bn", "en"}:
+            preferred = bn_result if lang == "bn" else en_result
+            if (preferred.get("text") or "").strip():
+                text = preferred["text"].strip()
+                confidence = preferred.get("confidence")
+                return {
+                    "success": True,
+                    "text": text,
+                    "language": lang,
+                    "confidence": confidence,
+                    "needs_review": _stt_needs_review(text, lang, confidence),
+                }
+
         picked = _pick_auto_transcript(bn_result, en_result)
         if not picked:
             return {"success": False, "error": "No speech detected"}
         text, detected = picked
-        return {"success": True, "text": text, "language": detected}
+        confidence = bn_result.get("confidence") if detected == "bn" else en_result.get("confidence")
+        return {
+            "success": True,
+            "text": text,
+            "language": detected,
+            "confidence": confidence,
+            # The fallback already chose the better pass, so only demand a
+            # review when the result itself looks doubtful.
+            "needs_review": _stt_needs_review(text, detected, confidence),
+        }
 
     return await run_in_threadpool(_transcribe)
 
@@ -913,7 +1016,7 @@ async def health():
         "ai_primary": getattr(config, "AI_PRIMARY", "gemini"),
         "whisper_model": WHISPER_MODEL,
         "voice_duplex": True,
-        "stt_strategy": "dual-pass-confidence",
+        "stt_strategy": "detect-then-bilingual-fallback",
         "weather_source": "open-meteo",
     }
 
@@ -939,9 +1042,13 @@ async def startup_event():
             except Exception as e:
                 print(f"⚠️ Voice callback error: {e}")
 
-        # Start background listening (ATLAS_VOICE_AUTOSTART=0 diye bondho kora jay)
-        if os.getenv("ATLAS_VOICE_AUTOSTART", "1") == "0":
-            print("ℹ️ Voice continuous listening disabled (ATLAS_VOICE_AUTOSTART=0)")
+        # The web UI records with the browser/phone microphone. A second
+        # always-on listener on the laptop microphone competes for the same
+        # device and burns the shared Whisper rate limit on room noise, which
+        # made real voice commands come back as unrelated text. Server-side
+        # wake word is now opt-in (ATLAS_VOICE_AUTOSTART=1).
+        if os.getenv("ATLAS_VOICE_AUTOSTART", "0") != "1":
+            print("ℹ️ Voice continuous listening disabled (set ATLAS_VOICE_AUTOSTART=1 to enable)")
         else:
             try:
                 _voice_input.start_continuous_listening(callback=_voice_callback)

@@ -33,6 +33,7 @@ export default function JarvisHUD() {
   const [online, setOnline] = useState(true)
   const [cameraOn, setCameraOn] = useState(false)
   const [chatState, setChatState] = useState('idle')
+  const [draft, setDraft] = useState(null)
   const inputRef = useRef(null)
 
   const loadMetrics = useCallback(async () => {
@@ -97,7 +98,16 @@ export default function JarvisHUD() {
   // Voice input: record on the phone, transcribe on the server.
   const mic = useMicrophone({
     language: voiceLang,
-    onText: text => sendChat(text),
+    onText: (text, meta) => {
+      // A doubtful transcript is not executed immediately: put it in the
+      // message box so the user can fix a misheard word and press Enter.
+      if (meta?.needsReview) {
+        setDraft({ text, nonce: Date.now() })
+        toast(`🎙️ শুনেছি: “${text}” — ঠিক থাকলে Enter চাপো`, { duration: 6000 })
+        return
+      }
+      sendChat(text)
+    },
     onError: message => toast.error(message),
   })
 
@@ -163,6 +173,7 @@ export default function JarvisHUD() {
             onReplay={replayReply}
             onClear={chat.clear}
             inputRef={inputRef}
+            draft={draft}
             isListening={mic.listening}
             userName={userName}
           />

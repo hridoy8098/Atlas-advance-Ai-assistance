@@ -16,6 +16,7 @@ export default function ConversationPanel({
   onReplay,
   onClear,
   inputRef,
+  draft,
   isListening,
   userName = 'Boss',
 }) {
@@ -23,6 +24,12 @@ export default function ConversationPanel({
   const localRef = useRef(null)
   const scrollRef = useRef(null)
   const ref = inputRef || localRef
+
+  useEffect(() => {
+    if (!draft?.text) return
+    setValue(draft.text)
+    requestAnimationFrame(() => ref.current?.focus())
+  }, [draft, ref])
 
   useEffect(() => {
     const el = scrollRef.current

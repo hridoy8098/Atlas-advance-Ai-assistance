@@ -71,8 +71,13 @@ export default function useMicrophone({ language = 'auto', onText, onError } = {
       try {
         const res = await transcribeAudio(blob, language)
         if (!mountedRef.current) return
-        if (res?.success && res.text) onText?.(res.text)
-        else onError?.(res?.error || 'Kichu bujhte parlam na. Abar try koro.')
+        if (res?.success && res.text) {
+          onText?.(res.text, {
+            language: res.language,
+            confidence: res.confidence,
+            needsReview: Boolean(res.needs_review),
+          })
+        } else onError?.(res?.error || 'Kichu bujhte parlam na. Abar try koro.')
       } catch {
         if (mountedRef.current) onError?.('Voice upload failed. Connection check koro.')
       } finally {
