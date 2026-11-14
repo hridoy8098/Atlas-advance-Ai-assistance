@@ -129,6 +129,18 @@ for command, expected, query in SEQUENCES:
         queries = [str(plan.entities.get("query") or "") for plan in plans]
         report(any(query == value for value in queries), f"query preserved: {query!r}", f"{queries}")
 
+print("\n=== 3b. EVERY AGENT IN A MULTI-STEP PLAN ===")
+for command, (agent, intent) in ROUTING.items():
+    compound = f"{command} and system status"
+    plans = plan_sequence(compound)
+    actual_agents = [plan.agent for plan in plans]
+    ok = len(plans) >= 2 and agent in actual_agents and "pc" in actual_agents
+    report(
+        ok,
+        f"multi: {command!r}",
+        f"{[(plan.agent, plan.intent) for plan in plans]}" if not ok else f"{len(plans)} steps",
+    )
+
 print("\n=== 4. REAL SEQUENTIAL EXECUTION (browser launch stubbed) ===")
 # Do not open real browser windows during verification. The agents still build
 # real URLs, resolve real YouTube results and return real messages.
