@@ -118,6 +118,162 @@ def _clean_query(text: str) -> str:
     return value.strip(" .,!?।:;-\"'")
 
 
+# ---------------------------------------------------------------------------
+# Multi-step commands
+# ---------------------------------------------------------------------------
+# "open youtube and search lofi beats and play" must become a small ordered
+# plan, not one app launch that silently ignores the rest of the sentence.
+# Splitting is conservative: if any piece cannot be planned, the original
+# sentence is kept intact and goes through normal single-command planning.
+_SEQUENCE_SPLIT_RE = re.compile(
+    r"\s*(?:"
+    r"\band\s+then\b|\bthen\b|\btarpor\b|\btar\s+por\b|"
+    r"(?<![\u0980-\u09ff])এর\s*পর(?![\u0980-\u09ff])|"
+    r"(?<![\u0980-\u09ff])তারপর(?![\u0980-\u09ff])|"
+    r"(?<![\u0980-\u09ff])এরপর(?![\u0980-\u09ff])|"
+    r"\bkore\b|\bkhule\b|"
+    r"(?<![\u0980-\u09ff])করে(?![\u0980-\u09ff])|"
+    r"(?<![\u0980-\u09ff])খুলে(?![\u0980-\u09ff])|"
+    r",|;|।|"
+    r"\band\b|\bar\b|"
+    r"(?<![\u0980-\u09ff])আর(?![\u0980-\u09ff])|"
+    r"(?<![\u0980-\u09ff])এবং(?![\u0980-\u09ff])"
+    r")\s*",
+    re.I,
+)
+
+_QUOTED_RE = re.compile(r'"[^"]*"|\'[^\']*\'|“[^”]*”')
+
+
+def _protect_quotes(text: str) -> tuple:
+    kept = []
+
+    def hide(match):
+        kept.append(match.group(0))
+        return f"\u00a7Q{len(kept) - 1}\u00a7"
+
+    return _QUOTED_RE.sub(hide, text), kept
+
+
+def _restore_quotes(text: str, kept: list) -> str:
+    for index, value in enumerate(kept):
+        text = text.replace(f"\u00a7Q{index}\u00a7", value)
+    return text
+
+
+def split_steps(command: str) -> list:
+    text = _strip_polite(command)
+    if not text or not _SEQUENCE_SPLIT_RE.search(text):
+        return [text] if text else []
+
+    protected, kept = _protect_quotes(text)
+    parts = [
+        _restore_quotes(part.strip(" .,!?।:;-"), kept)
+        for part in _SEQUENCE_SPLIT_RE.split(protected)
+        if part.strip(" .,!?।:;-")
+    ]
+    if len(parts) < 2:
+        return [text]
+    return parts
+
+
+def _step_query(plan: Plan) -> str:
+    return _norm(plan.entities.get("query") or plan.entities.get("topic") or "")
+
+
+def _advance_context(context: dict, plan: Plan) -> None:
+    if plan.agent == "app" and plan.intent == "open_app":
+        app = str(plan.entities.get("app_name") or "")
+        if app:
+            context["app"] = app
+    if plan.agent == "media":
+        if plan.intent in ("media_youtube", "media_youtube_play"):
+            context["app"] = "youtube"
+        query = str(plan.entities.get("query") or "")
+        if query:
+            context["last_query"] = query
+    if plan.agent == "web" and plan.intent in ("web_search", "web_research", "wikipedia_search"):
+        query = str(plan.entities.get("query") or plan.entities.get("topic") or "")
+        if query:
+            context["last_query"] = query
+
+
+def _collapse_plans(plans: list) -> list:
+    """Remove redundant steps while keeping the visible order."""
+    deduped = []
+    for plan in plans:
+        if (
+            deduped
+            and deduped[-1].agent == plan.agent
+            and deduped[-1].intent == plan.intent
+            and _step_query(deduped[-1]) == _step_query(plan)
+        ):
+            continue
+        deduped.append(plan)
+
+    # "youtube search X" followed by "play" is one real action: search+play.
+    collapsed = []
+    for index, plan in enumerate(deduped):
+        if plan.agent == "media" and plan.intent == "media_youtube":
+            following = deduped[index + 1] if index + 1 < len(deduped) else None
+            if (
+                following
+                and following.agent == "media"
+                and following.intent == "media_youtube_play"
+                and _step_query(plan) == _step_query(following)
+            ):
+                continue
+        collapsed.append(plan)
+    return collapsed
+
+
+def _context_rules(cmd: str, context: dict) -> Optional[Plan]:
+    """Resolve elliptical steps such as “search lofi” + “play”."""
+    if not context or context.get("app") != "youtube":
+        return None
+
+    last_query = str(context.get("last_query") or "")
+
+    if _m(
+        r"^(?:play|start|chalao|chala|bajao|sunao|chaliye\s*chalao|"
+        r"চালাও|চালিয়ে\s*চালাও|চালিয়ে|বাজাও|শোনাও)"
+        r"(?:\s+(?:it|that|eta|এটা))?$",
+        cmd,
+    ):
+        return _plan(
+            "media", "media_youtube_play", "youtube play (context)",
+            {"query": last_query, "_command": cmd},
+        )
+
+    play_any = _m(r"^(?:play|chalao|chala|bajao|sunao)\s+(.+)$|^(?:চালাও|বাজাও|শোনাও)\s+(.+)$", cmd)
+    if play_any:
+        query = _clean_query(next((group for group in play_any.groups() if group), ""))
+        if query and _norm(query) not in ("it", "that", "eta", "এটা"):
+            return _plan("media", "media_youtube_play", "youtube play (context)",
+                         {"query": query, "_command": cmd})
+
+    search = _m(
+        r"^(?:search|find|look\s+for|খুঁজো|খোঁজো|সার্চ)\s*(?:for|on\s+youtube)?\s*(.+)$",
+        cmd,
+    )
+    if search:
+        query = _clean_query(search.group(1))
+        if query:
+            return _plan("media", "media_youtube", "youtube search (context)",
+                         {"query": query, "_command": cmd})
+
+    search_after = _m(
+        r"^(.+?)\s+(?:search|খুঁজো|খোঁজো|সার্চ)\s*(?:koro|kor|koren|করো|করুন)?$",
+        cmd,
+    )
+    if search_after:
+        query = _clean_query(search_after.group(1))
+        if query:
+            return _plan("media", "media_youtube", "youtube search (context)",
+                         {"query": query, "_command": cmd})
+    return None
+
+
 def _rx(pattern: str, text: str) -> Optional[re.Match]:
     return _s(pattern, text, re.IGNORECASE)
 
@@ -408,6 +564,36 @@ def _file_rules(cmd: str) -> Optional[Plan]:
     return None
 
 
+_YT_WORD_RE = re.compile(r"\b(?:youtube|you\s*tube|yt|ইউটিউবে?|ইউটিউব)\b", re.I)
+_YT_PLAY_VERB_RE = re.compile(
+    r"\b(?:play|chalao|chala|bajao|sunao|chaliye\s*chalao|"
+    r"চালাও|চালিয়ে\s*চালাও|চালিয়ে|বাজাও|শোনাও)\b",
+    re.I,
+)
+
+
+def _youtube_play_query(text: str) -> str:
+    """Extract the real search query from “youtube ... search ... play ...”."""
+    value = _strip_polite(text)
+    if not _YT_WORD_RE.search(value) or not _YT_PLAY_VERB_RE.search(value):
+        return ""
+
+    query = _YT_WORD_RE.sub(" ", value)
+    query = re.sub(
+        r"\b(?:open|launch|start|kholo|khol|khule|খুলে|খোলো|খোল|চালু)\b",
+        " ", query, flags=re.I,
+    )
+    query = re.sub(
+        r"\b(?:search|find|look\s+for|khujo|khunjo|সার্চ|খুঁজে|খোঁজো|খুঁজো)\b",
+        " ", query, flags=re.I,
+    )
+    query = re.sub(r"\b(?:kore|kor|koro|koren|করে|করো|করুন)\b", " ", query, flags=re.I)
+    query = _YT_PLAY_VERB_RE.sub(" ", query)
+    query = re.sub(r"\b(?:on|in|e|এ)\b", " ", query, flags=re.I)
+    query = re.sub(r"\b(?:and|then|ar|আর|এবং|please|pls|প্লিজ)\b", " ", query, flags=re.I)
+    return _clean_query(query)
+
+
 def _media_rules(cmd: str) -> Optional[Plan]:
     if _s(r"\b(?:pause|resume|stop)\s+(?:the\s+)?music\b|\bmusic\s+(?:status|stop|pause)\b", cmd):
         return _plan("media", "media_music", "music control", {"_command": cmd})
@@ -416,6 +602,13 @@ def _media_rules(cmd: str) -> Optional[Plan]:
     if _s(r"\bplay\s+(?:the\s+)?song\s+(.+)$", cmd):
         return _plan("media", "media_music", "play song", {"query": _clean_query(_s(r"\bplay\s+(?:the\s+)?song\s+(.+)$", cmd).group(1)), "_command": cmd})
 
+    # "youtube open kore <query> search kore play koro" and all of its
+    # English/Bangla/Banglish variants: search + play is one real action.
+    yt_play_query = _youtube_play_query(cmd)
+    if yt_play_query:
+        return _plan("media", "media_youtube_play", "youtube search and play",
+                     {"query": yt_play_query, "_command": cmd})
+
     yt_match = _s(r"\b(?:youtube|ইউটিউব)\s+(?:search|খুঁজ)\s+(.+)$|\bsearch\s+(?:on\s+)?youtube\s+(?:for\s+)?(.+)$", cmd)
     if yt_match:
         query = next((group for group in yt_match.groups() if group), "").strip()
@@ -423,7 +616,7 @@ def _media_rules(cmd: str) -> Optional[Plan]:
 
     play_yt = _s(r"\bplay\s+(.+?)\s+on\s+youtube\b", cmd)
     if play_yt:
-        return _plan("media", "media_youtube", "play on youtube", {"query": play_yt.group(1).strip(), "_command": cmd})
+        return _plan("media", "media_youtube_play", "play on youtube", {"query": play_yt.group(1).strip(), "_command": cmd})
 
     if _s(r"\b(?:generate|create|make|draw)\s+(?:an?\s+)?(?:image|picture|photo)\b|\bdraw\s+(.+)$|ছবি\s*(?:বানাও|তৈরি|জেনারেট)|ইমেজ\s*(?:বানাও|জেনারেট)", cmd):
         prompt = cmd
@@ -467,15 +660,15 @@ def _media_rules(cmd: str) -> Optional[Plan]:
         return _plan("media", "media_subtitle", "subtitle", {"url": url, "_command": cmd})
 
     if _s(r"\bplay\s+(?:the\s+)?video\s+(.+)$", cmd):
-        return _plan("media", "media_youtube", "play video", {"query": _clean_query(_s(r"\bplay\s+(?:the\s+)?video\s+(.+)$", cmd).group(1)), "_command": cmd})
+        return _plan("media", "media_youtube_play", "play video", {"query": _clean_query(_s(r"\bplay\s+(?:the\s+)?video\s+(.+)$", cmd).group(1)), "_command": cmd})
 
     # Generic "play <query>" without an explicit media noun behaves like a
-    # YouTube search ("play lofi beats"), while "play music" is handled above.
+    # YouTube search + play ("play lofi beats"), while "play music" is local.
     play_match = _m(r"^play\s+(.+)$", cmd)
     if play_match and not _s(r"\b(?:music|song|audio|playlist|video)\b", cmd):
         query = _clean_query(play_match.group(1))
         if query and query not in ("music", "song"):
-            return _plan("media", "media_youtube", "play query", {"query": query, "_command": cmd})
+            return _plan("media", "media_youtube_play", "play query", {"query": query, "_command": cmd})
     return None
 
 
@@ -812,14 +1005,25 @@ _QUESTION_RE = re.compile(
 )
 
 
-def plan_command(command: str) -> Optional[Plan]:
-    """Return a Plan for an actionable command, or None for AI chat."""
+def plan_command(command: str, context: Optional[Dict[str, Any]] = None) -> Optional[Plan]:
+    """Return a Plan for an actionable command, or None for AI chat.
+
+    ``context`` is only supplied while planning a multi-step sentence; it
+    resolves elliptical follow-up steps such as “search lofi” + “play”.
+    """
     original = str(command or "").strip()
     if not original:
         return None
     cmd = _strip_polite(original)
     if not cmd:
         return None
+
+    if context:
+        contextual = _context_rules(cmd, context)
+        if contextual:
+            contextual.entities.setdefault("_command", original)
+            contextual.entities.setdefault("_language", "bn" if is_bengali(original) else "en")
+            return contextual
 
     # Explicit rules, ordered from most specific/risky to most general.
     for rule in (
@@ -854,6 +1058,36 @@ def plan_command(command: str) -> Optional[Plan]:
     if _QUESTION_RE.search(cmd) or original.rstrip().endswith(("?", "؟")):
         return None
     return None
+
+
+def plan_sequence(command: str) -> list:
+    """Plan a compound command as an ordered list of steps.
+
+    A single-action sentence returns one plan (or an empty list for chat).
+    Multi-step is intentionally conservative: if any piece cannot be planned,
+    the whole sentence is treated as one command so nothing is half-executed.
+    """
+    original = str(command or "").strip()
+    if not original:
+        return []
+
+    segments = split_steps(original)
+    if len(segments) <= 1:
+        plan = plan_command(original)
+        return [plan] if plan else []
+
+    context: Dict[str, Any] = {}
+    plans = []
+    for segment in segments:
+        plan = plan_command(segment, context=context)
+        if plan is None:
+            single = plan_command(original)
+            return [single] if single else []
+        plan.entities.setdefault("_step_command", segment)
+        plans.append(plan)
+        _advance_context(context, plan)
+
+    return _collapse_plans(plans)
 
 
 def is_action_command(command: str) -> bool:

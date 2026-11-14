@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 import config
 from backend.agent.agent_orchestrator import agent_orchestrator
-from backend.agent.smart_planner import plan_command
+from backend.agent.smart_planner import plan_command, plan_sequence
 from backend.core.weather import get_weather as fetch_weather
 from backend.core.ai_engine import ai_engine
 from backend.core.memory import memory_manager
@@ -117,7 +117,7 @@ def is_agent_command(parsed: Dict) -> bool:
     command = str(parsed.get("original_command") or "").strip()
     if command:
         try:
-            return plan_command(command) is not None
+            return bool(plan_sequence(command))
         except Exception:
             pass
 

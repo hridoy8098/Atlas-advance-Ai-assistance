@@ -36,6 +36,87 @@ def _extract_url(text: str) -> str:
     return generic.group(0).rstrip(".,;!?।") if generic else ""
 
 
+# YouTube's search endpoint often returns zero results for a mixed Bengali
+# phrase while the English loanword finds the intended videos. "লফি বিটস" is a
+# real example: exact search is empty, "lofi beats" plays the top lofi video.
+_BN_MEDIA_WORDS = {
+    "লফি": "lofi",
+    "বিটস": "beats",
+    "মিউজিক": "music",
+    "গান": "song",
+    "গজল": "ghazal",
+    "নাটক": "natok",
+    "সিনেমা": "movie",
+    "ভিডিও": "video",
+    "বাংলা": "bangla",
+    "হিন্দি": "hindi",
+    "ইংরেজি": "english",
+    "রোমান্টিক": "romantic",
+    "ক্লাসিক": "classic",
+    "পপ": "pop",
+    "রক": "rock",
+    "পড়াশোনা": "study",
+    "ঘুম": "sleep",
+    "রিল্যাক্স": "relax",
+    "খুশি": "happy",
+    "দুঃখ": "sad",
+    "বাচ্চাদের": "kids",
+    "কার্টুন": "cartoon",
+    "ইসলামিক": "islamic",
+    "জাতীয়": "national",
+}
+
+_BN_SCRIPT_RE = re.compile(r"[\u0980-\u09ff]")
+
+
+def _youtube_query_variants(query: str) -> List[str]:
+    """Progressively simpler queries when the exact one finds no video."""
+    variants: List[str] = []
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", str(value or "")).strip()
+        if value and value.lower() not in {item.lower() for item in variants}:
+            variants.append(value)
+
+    add(query)
+    translated = query
+    for bengali, english in _BN_MEDIA_WORDS.items():
+        translated = translated.replace(bengali, english)
+    add(translated)
+
+    if _BN_SCRIPT_RE.search(query):
+        words = [word for word in re.split(r"\s+", query) if word]
+        if len(words) > 1:
+            add(words[0])
+            add(" ".join(words[:2]))
+    return variants
+
+
+def _youtube_top_entry(query: str) -> Dict[str, Any]:
+    """Return the first yt-dlp search entry, or {} when the query is empty."""
+    import yt_dlp
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "noplaylist": True,
+        "socket_timeout": 10,
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(f"ytsearch3:{query}", download=False)
+    entries = (info or {}).get("entries") or []
+    return (entries[0] or {}) if entries else {}
+
+
+def _entry_video_url(entry: Dict[str, Any]) -> str:
+    url = str((entry or {}).get("webpage_url") or (entry or {}).get("url") or "")
+    if url and not url.lower().startswith(("http://", "https://")):
+        url = f"https://www.youtube.com/watch?v={url}"
+    return url
+
+
 class MediaAgent(BaseAgent):
     def __init__(self):
         super().__init__(
@@ -92,6 +173,49 @@ class MediaAgent(BaseAgent):
                               f"🎬 {info.get('title')} — {info.get('author')}\n{url}"),
                 "url": url, "title": info.get("title"), "author": info.get("author"),
                 "thumbnail": info.get("thumbnail")}
+
+    def youtube_play(self, query: str, command: str = "") -> Dict[str, Any]:
+        """Search YouTube and play the top result, not just the result list."""
+        query = clean_text(query)
+        if not query:
+            return {"success": False, "action": "media_youtube_play", "agent": "media",
+                    "message": tr(command, "What should I play on YouTube?",
+                                  "ইউটিউবে কী চালাব?")}
+
+        if video_downloader.available():
+            entry: Dict[str, Any] = {}
+            resolved_query = query
+            for candidate in _youtube_query_variants(query):
+                try:
+                    candidate_entry = _youtube_top_entry(candidate)
+                except Exception:
+                    # A blocked extraction should never lose the user's
+                    # request; try the next, simpler query variant.
+                    continue
+                if candidate_entry and _entry_video_url(candidate_entry):
+                    entry = candidate_entry
+                    resolved_query = candidate
+                    break
+
+            url = _entry_video_url(entry)
+            if url:
+                opened = self._open(url)
+                title = str(entry.get("title") or query)
+                if opened:
+                    message = tr(command, f"▶️ Playing on YouTube: {title}",
+                                 f"▶️ ইউটিউবে চলছে: {title}")
+                else:
+                    message = tr(command, f"▶️ YouTube play link: {title}\n{url}",
+                                 f"▶️ ইউটিউব প্লে লিংক: {title}\n{url}")
+                return {"success": True, "action": "media_youtube_play",
+                        "agent": "media", "message": message, "query": query,
+                        "resolved_query": resolved_query, "title": title,
+                        "url": url, "opened": opened, "video_url": url}
+
+        fallback = self.youtube_search(query, command)
+        fallback["action"] = "media_youtube_play"
+        fallback["query"] = query
+        return fallback
 
     # ---------------- images ----------------
     def generate_image(self, prompt: str, size: str = "1024x1024", command: str = "") -> Dict[str, Any]:
@@ -283,6 +407,12 @@ class MediaAgent(BaseAgent):
         lower = command.lower()
 
         try:
+            if intent_lower == "media_youtube_play":
+                return self.youtube_play(
+                    query or re.sub(r"^\s*(?:play|youtube|search)\s+", "", command),
+                    command,
+                )
+
             if intent_lower in ("media_music", "play_music") or re.search(
                 r"\bplay\b.*\b(?:music|song|audio|playlist)\b|\bgan|gaan|music\b", lower
             ):

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 
 import config
@@ -24,7 +25,7 @@ from .app_agent import AppAgent
 from .terminal_agent import TerminalAgent
 from .agent_i18n import is_bengali
 from .agent_registry import agent_registry
-from .smart_planner import plan_command
+from .smart_planner import plan_command, plan_sequence
 from .coding_agent import coding_agent
 from .screen_rpa_agent import screen_rpa_agent
 from .research_pro_agent import research_pro_agent
@@ -49,6 +50,15 @@ CONNECTOR_COMMAND = (
     "python connector/atlas_laptop.py "
     "--server https://atlas-7-api.onrender.com --token <pair-code>"
 )
+
+# Agents already prefix their message with a status icon (✅ / ⚠️ / ➡️ ...).
+# In a multi-step list the step number supplies that status, so strip the inner
+# prefix to avoid "✅ 1. ✅ Opened YouTube.".
+_STATUS_PREFIX_RE = re.compile(r"^\s*(?:✅|⚠️|⚠|❌|❎|➡️|➡|✔️|✔|☑️|☑)+\s*")
+
+
+def _strip_status_prefix(message: str) -> str:
+    return _STATUS_PREFIX_RE.sub("", str(message or "")).strip()
 
 
 class AgentOrchestrator:
@@ -88,9 +98,13 @@ class AgentOrchestrator:
         entities["_command"] = original
         intent_lower = str(intent or "").lower()
 
-        # 1) Deterministic planner is the source of truth.
-        plan = plan_command(original) if original else None
-        if plan is not None:
+        # 1) Deterministic planner is the source of truth. Compound commands
+        #    ("open youtube and search X and play") become an ordered sequence.
+        plans = plan_sequence(original) if original else []
+        if len(plans) > 1:
+            return self._run_sequence(plans, original)
+        if len(plans) == 1:
+            plan = plans[0]
             merged = dict(entities)
             merged.update(plan.entities or {})
             merged["_command"] = original
@@ -167,6 +181,7 @@ class AgentOrchestrator:
             "wikipedia_search": "web",
             # Media
             "media_youtube": "media",
+            "media_youtube_play": "media",
             "media_music": "media",
             "media_image": "media",
             "media_meme": "media",
@@ -320,6 +335,76 @@ class AgentOrchestrator:
         except Exception as exc:
             return {"success": False, "action": "agent_error", "agent": agent_key,
                     "message": f"❌ {agent_key} agent error: {exc}"}
+
+    def _run_sequence(self, plans: list, original: str) -> Dict:
+        """Execute an ordered multi-step plan and return one combined reply."""
+        bengali = is_bengali(original)
+        results: List[Dict] = []
+        steps: List[Dict] = []
+
+        for index, plan in enumerate(plans, 1):
+            entities = dict(plan.entities or {})
+            entities["_command"] = entities.get("_command") or original
+            entities["_sequence_command"] = original
+            entities["_step"] = index
+            result = self._run_agent(plan.agent, plan.intent, entities)
+            results.append(result)
+            steps.append({
+                "step": index,
+                "agent": plan.agent,
+                "intent": plan.intent,
+                "action": result.get("action", plan.intent),
+                "success": bool(result.get("success")),
+                "message": str(result.get("message") or "").strip(),
+            })
+
+        successes = [result for result in results if result.get("success")]
+        failures = [result for result in results if not result.get("success")]
+
+        lines = []
+        for step in steps:
+            icon = "✅" if step["success"] else "⚠️"
+            message = _strip_status_prefix(step["message"]) or (
+                "সম্পন্ন হয়েছে।" if bengali and step["success"]
+                else "Failed." if not step["success"] else "Done."
+            )
+            if len(message) > 600:
+                message = message[:597].rstrip() + "..."
+            lines.append(f"{icon} {step['step']}. {message}")
+
+        header = "🧩 ধাপে ধাপে কাজ:" if bengali else "🧩 Multi-step:"
+        message = header + "\n" + "\n".join(lines)
+
+        aggregated: Dict[str, Any] = {}
+        for result in reversed(results):
+            for key in (
+                "url", "deep_link", "phone", "contact", "requires_bridge",
+                "requires_manual_tap", "call", "query",
+            ):
+                value = result.get(key)
+                if key not in aggregated and value not in (None, "", False, []):
+                    aggregated[key] = value
+
+        if any(result.get("needs_connector") for result in results):
+            aggregated["needs_connector"] = True
+            connector = next(
+                (result.get("connector_command") for result in results if result.get("connector_command")),
+                CONNECTOR_COMMAND,
+            )
+            aggregated["connector_command"] = connector
+
+        return {
+            "success": not failures,
+            "partial": bool(successes and failures),
+            "action": "multi_step",
+            "agent": "multi_step",
+            "message": message,
+            "multi_step": True,
+            "step_count": len(steps),
+            "steps": steps,
+            "failed_steps": [step["step"] for step in steps if not step["success"]],
+            **aggregated,
+        }
 
     # Backward-compatible diagnostic helper. It is no longer used for routing.
     def _advanced_route(self, command: str) -> str:
